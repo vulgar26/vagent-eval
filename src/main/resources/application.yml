@@ -4,6 +4,8 @@ server:
 spring:
   application:
     name: vagent-eval
+  jackson:
+    property-naming-strategy: SNAKE_CASE
 
 # 对外 JSON / API 字段以 snake_case 为准；此处为服务配置，使用 kebab-case 与 SSOT 对齐。
 eval:

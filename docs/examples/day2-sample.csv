@@ -1,0 +1,4 @@
+case_id,question,expected_behavior,requires_citations,tags
+csv_001,"给我一个3天上海行程的大纲",answer,false,"travel/basic|smoke"
+csv_002,"请你先问我两个问题以澄清我的预算与出行人数",clarify,false,"travel/clarify|smoke"
+
