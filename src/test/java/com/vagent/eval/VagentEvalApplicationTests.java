@@ -93,4 +93,50 @@ class VagentEvalApplicationTests {
                 .andExpect(jsonPath("$.cases[0].expected_behavior").value("answer"))
                 .andExpect(jsonPath("$.cases[0].requires_citations").value(true));
     }
+
+    @Test
+    void runCreateAndCancel() throws Exception {
+        String createDataset = """
+                {"name":"run_smoke","version":"v1","description":"day3"}
+                """;
+        String dsBody = mockMvc.perform(post("/api/v1/eval/datasets")
+                        .contentType("application/json")
+                        .content(createDataset))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.dataset_id").exists())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        String datasetId = dsBody.split("\"dataset_id\"\\s*:\\s*\"")[1].split("\"")[0];
+
+        String jsonl = """
+                {"case_id":"c1","question":"q1","expected_behavior":"answer","requires_citations":false,"tags":["t1"]}
+                """;
+        mockMvc.perform(post("/api/v1/eval/datasets/" + datasetId + "/import")
+                        .contentType("application/x-ndjson")
+                        .content(jsonl))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.case_count").value(1));
+
+        String runReq = """
+                {"dataset_id":"%s","target_id":"vagent"}
+                """.formatted(datasetId);
+
+        String runBody = mockMvc.perform(post("/api/v1/eval/runs")
+                        .contentType("application/json")
+                        .content(runReq))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.run_id").exists())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        String runId = runBody.split("\"run_id\"\\s*:\\s*\"")[1].split("\"")[0];
+
+        mockMvc.perform(post("/api/v1/eval/runs/" + runId + "/cancel")
+                        .contentType("application/json")
+                        .content("{\"reason\":\"test\"}"))
+                .andExpect(status().isOk());
+    }
 }

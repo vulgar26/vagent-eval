@@ -29,6 +29,13 @@ public class ApiExceptionHandler {
                 .body(Map.of("error", "BAD_REQUEST", "message", safeMsg(e)));
     }
 
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<Map<String, Object>> internal(Exception e) {
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("error", "INTERNAL", "message", ""));
+    }
+
     private static String safeMsg(Exception e) {
         String m = e.getMessage();
         return m == null ? "" : m;

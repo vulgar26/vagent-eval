@@ -75,6 +75,18 @@ public class DatasetStore {
         return List.copyOf(list.subList(from, to));
     }
 
+    /**
+     * Day3 Runner 用：串行执行需要一次性拿到所有 case（避免在执行过程中分页多次请求）。
+     * 仍然返回不可变拷贝，避免外部修改内部存储。
+     */
+    public List<EvalCase> listAllCases(String datasetId) {
+        List<EvalCase> list = casesByDatasetId.get(datasetId);
+        if (list == null) {
+            throw new IllegalArgumentException("dataset not found");
+        }
+        return List.copyOf(list);
+    }
+
     public int caseCount(String datasetId) {
         return casesByDatasetId.getOrDefault(datasetId, List.of()).size();
     }
