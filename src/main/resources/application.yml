@@ -1,0 +1,32 @@
+server:
+  port: 8099
+
+spring:
+  application:
+    name: vagent-eval
+
+# 对外 JSON / API 字段以 snake_case 为准；此处为服务配置，使用 kebab-case 与 SSOT 对齐。
+eval:
+  api:
+    enabled: false
+    token-hash: ""
+    allow-cidrs:
+      - 127.0.0.1/32
+    require-https: false
+  targets:
+    - target-id: vagent
+      base-url: http://localhost:8080
+      enabled: true
+    - target-id: travel-ai
+      base-url: http://localhost:8081
+      enabled: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true

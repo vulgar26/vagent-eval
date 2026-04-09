@@ -1,0 +1,21 @@
+# 复制为 application-local.yml（勿提交密钥）或注入环境变量后使用。
+# 脱敏示例：仅展示形态；真实 token 仅存 hash，见 eval-upgrade.md E1/E3。
+
+server:
+  port: 8099
+
+eval:
+  api:
+    enabled: true
+    token-hash: "<HMAC_OR_BCRYPT_OF_TOKEN>"
+    allow-cidrs:
+      - 127.0.0.1/32
+      - 10.0.0.0/8
+    require-https: true
+  targets:
+    - target-id: vagent
+      base-url: https://vagent.internal.example
+      enabled: true
+    - target-id: travel-ai
+      base-url: https://travel-ai.internal.example
+      enabled: false
