@@ -113,6 +113,14 @@ public class RunRunner {
                 return new EvalResult(run.runId(), run.datasetId(), run.targetId(), c.caseId(), verdict,
                         errorCode, latencyMs, now, debug);
             } else {
+                // Day4：2xx 但 body 非 JSON → PARSE_ERROR（与 CONTRACT_VIOLATION 区分）
+                if (tr.json() == null || tr.json().isNull()) {
+                    verdict = Verdict.FAIL;
+                    errorCode = ErrorCode.PARSE_ERROR;
+                    debug.put("parse_error", "body_not_json");
+                    return new EvalResult(run.runId(), run.datasetId(), run.targetId(), c.caseId(), verdict,
+                            errorCode, latencyMs, now, debug);
+                }
                 RunEvaluator.EvalOutcome o = evaluator.evaluate(c, tr.json());
                 verdict = o.verdict();
                 errorCode = o.errorCode() == null ? null : o.errorCode();
