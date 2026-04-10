@@ -136,6 +136,10 @@ public class RunRunner {
             verdict = Verdict.FAIL;
             errorCode = ErrorCode.UPSTREAM_UNAVAILABLE;
             debug.put("exception", e.getClass().getSimpleName());
+            String msg = e.getMessage();
+            if (msg != null && !msg.isBlank()) {
+                debug.put("exception_message", msg);
+            }
         }
 
         long latencyMs = (System.nanoTime() - t0) / 1_000_000L;

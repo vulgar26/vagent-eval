@@ -19,6 +19,14 @@ import java.util.Map;
 @Component
 public class RunEvaluator {
 
+    /**
+     * P0 判定器版本号（Day5 要求：规则版本化）。
+     * <p>
+     * 作用：当规则迭代导致判定变化时，报告可以追溯“当时用的是哪版规则”。\n
+     * 后续可以把它提升为配置项或写入 run 级快照。
+     */
+    public static final String EVAL_RULE_VERSION = "p0.v1";
+
     private final EvalChatContractValidator contractValidator;
 
     public RunEvaluator(EvalChatContractValidator contractValidator) {
@@ -30,6 +38,10 @@ public class RunEvaluator {
 
     public EvalOutcome evaluate(EvalCase c, JsonNode respJson) {
         Map<String, Object> debug = new HashMap<>();
+        debug.put("eval_rule_version", EVAL_RULE_VERSION);
+        debug.put("expected_behavior", c.expectedBehavior().toJson());
+        debug.put("requires_citations", c.requiresCitations());
+
         if (respJson == null || respJson.isNull()) {
             return new EvalOutcome(Verdict.FAIL, ErrorCode.PARSE_ERROR, debug);
         }
@@ -41,47 +53,61 @@ public class RunEvaluator {
         }
 
         String behavior = asText(respJson.get("behavior"));
-        debug.put("behavior", behavior);
+        debug.put("actual_behavior", behavior);
 
-        String expected = c.expectedBehavior().toJson();
-        if (!expected.equalsIgnoreCase(behavior)) {
-            debug.put("expected_behavior", expected);
+        JsonNode caps = respJson.get("capabilities");
+        boolean retrievalSupported = caps != null && caps.get("retrieval") != null && bool(caps.get("retrieval").get("supported"));
+        boolean toolsSupported = caps != null && caps.get("tools") != null && bool(caps.get("tools").get("supported"));
+        debug.put("retrieval_supported", retrievalSupported);
+        debug.put("tools_supported", toolsSupported);
+
+        JsonNode sources = respJson.get("sources");
+        if (sources != null && sources.isArray()) {
+            debug.put("sources_count", sources.size());
+        }
+
+        String expectedBehavior = c.expectedBehavior().toJson();
+        // 期望 tool 但上游声明不支持工具时，与 citations+retrieval 同理：无法评测 → 跳过，不因 behavior=answer 判 mismatch。
+        if ("tool".equalsIgnoreCase(expectedBehavior) && !toolsSupported) {
+            debug.put("verdict_reason", "tools_unsupported");
+            return new EvalOutcome(Verdict.SKIPPED_UNSUPPORTED, ErrorCode.SKIPPED_UNSUPPORTED, debug);
+        }
+
+        if (!expectedBehavior.equalsIgnoreCase(behavior)) {
+            debug.put("verdict_reason", "behavior_mismatch");
             return new EvalOutcome(Verdict.FAIL, ErrorCode.UNKNOWN, debug);
         }
 
         if (c.requiresCitations()) {
-            JsonNode caps = respJson.get("capabilities");
-            boolean retrievalSupported = caps != null && caps.get("retrieval") != null && bool(caps.get("retrieval").get("supported"));
             if (!retrievalSupported) {
+                debug.put("verdict_reason", "retrieval_unsupported");
                 return new EvalOutcome(Verdict.SKIPPED_UNSUPPORTED, ErrorCode.SKIPPED_UNSUPPORTED, debug);
             }
-            JsonNode sources = respJson.get("sources");
             if (sources == null || !sources.isArray() || sources.size() < 1) {
+                debug.put("verdict_reason", "missing_sources");
                 return new EvalOutcome(Verdict.FAIL, ErrorCode.CONTRACT_VIOLATION, debug);
             }
         }
 
         if (c.expectedBehavior().toJson().equals("tool")) {
-            JsonNode caps = respJson.get("capabilities");
-            boolean toolsSupported = caps != null && caps.get("tools") != null && bool(caps.get("tools").get("supported"));
-            if (!toolsSupported) {
-                return new EvalOutcome(Verdict.SKIPPED_UNSUPPORTED, ErrorCode.SKIPPED_UNSUPPORTED, debug);
-            }
             JsonNode tool = respJson.get("tool");
             if (tool == null) {
+                debug.put("verdict_reason", "missing_tool_block");
                 return new EvalOutcome(Verdict.FAIL, ErrorCode.CONTRACT_VIOLATION, debug);
             }
             boolean required = bool(tool.get("required"));
             boolean used = bool(tool.get("used"));
             boolean succeeded = bool(tool.get("succeeded"));
+            debug.put("tool_required", required);
+            debug.put("tool_used", used);
+            debug.put("tool_succeeded", succeeded);
             if (!(required && used && succeeded)) {
-                debug.put("tool_required", required);
-                debug.put("tool_used", used);
-                debug.put("tool_succeeded", succeeded);
+                debug.put("verdict_reason", "tool_not_satisfied");
                 return new EvalOutcome(Verdict.FAIL, ErrorCode.UNKNOWN, debug);
             }
         }
 
+        debug.put("verdict_reason", "ok");
         return new EvalOutcome(Verdict.PASS, null, debug);
     }
 

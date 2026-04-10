@@ -44,4 +44,14 @@ class EvalProbeChatIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.latency_ms").doesNotExist());
     }
+
+    @Test
+    void probeCitationsOkIncludesSources() throws Exception {
+        mockMvc.perform(post("/api/v1/eval/chat")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"query\":\"CITATIONS_OK\",\"mode\":\"EVAL\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.capabilities.retrieval.supported").value(true))
+                .andExpect(jsonPath("$.sources[0].id").value("kb_chunk_1"));
+    }
 }

@@ -25,6 +25,12 @@ public class EvalProbeChatController {
     public Map<String, Object> evalChat(@RequestBody Map<String, Object> body) {
         Object q = body == null ? null : body.get("query");
         String query = q == null ? "" : String.valueOf(q);
+
+        // Day5：为了验收判定器 v1，提供几个稳定的“脚本关键词”来控制返回形态。
+        // - BAD_CONTRACT：缺 latency_ms → CONTRACT_VIOLATION
+        // - DENY_OK：behavior=deny（用于 expected_behavior 覆盖）
+        // - CITATIONS_OK：retrieval.supported=true 且 sources>=1（用于 requires_citations 覆盖）
+        // - TOOL_UNSUPPORTED：tools.supported=false（用于 SKIPPED_UNSUPPORTED 覆盖）
         if (query.contains("BAD_CONTRACT")) {
             Map<String, Object> caps = new LinkedHashMap<>();
             caps.put("retrieval", Map.of("supported", false, "score", false));
@@ -39,17 +45,25 @@ public class EvalProbeChatController {
         }
 
         Map<String, Object> caps = new LinkedHashMap<>();
-        caps.put("retrieval", Map.of("supported", false, "score", false));
-        caps.put("tools", Map.of("supported", false, "outcome", false));
+        boolean retrievalSupported = query.contains("CITATIONS_OK");
+        boolean toolsSupported = !query.contains("TOOL_UNSUPPORTED");
+        caps.put("retrieval", Map.of("supported", retrievalSupported, "score", false));
+        caps.put("tools", Map.of("supported", toolsSupported, "outcome", toolsSupported));
         caps.put("streaming", Map.of("ttft", false));
         caps.put("guardrails", Map.of("quoteOnly", false, "evidenceMap", false, "reflection", false));
 
         Map<String, Object> ok = new LinkedHashMap<>();
         ok.put("answer", "probe ok");
-        ok.put("behavior", "answer");
+        ok.put("behavior", query.contains("DENY_OK") ? "deny" : "answer");
         ok.put("latency_ms", 1);
         ok.put("capabilities", caps);
         ok.put("meta", Map.of("mode", "EVAL"));
+
+        if (query.contains("CITATIONS_OK")) {
+            ok.put("sources", new Object[]{
+                    Map.of("id", "kb_chunk_1", "title", "t1", "snippet", "s1")
+            });
+        }
         return ok;
     }
 }

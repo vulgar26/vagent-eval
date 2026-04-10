@@ -11,7 +11,7 @@ spring:
 eval:
   # 仅本地验收 Day4 契约时可设为 true，会注册 /api/v1/eval/chat 探针（默认 false）
   probe:
-    enabled: false
+    enabled: true
   api:
     enabled: false
     token-hash: ""
@@ -24,6 +24,9 @@ eval:
       enabled: true
     - target-id: travel-ai
       base-url: http://localhost:8081
+      enabled: true
+    - target-id: probe
+      base-url: http://localhost:8099
       enabled: true
 
 management:

@@ -2,6 +2,7 @@ package com.vagent.eval.run;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.vagent.eval.config.EvalProperties;
 import org.springframework.stereotype.Component;
 
@@ -47,8 +48,14 @@ public class TargetClient {
         // P0：token 还未接入（Day4/Day5 接安全边界）。先按 SSOT 预留头位。
         String token = ""; // intentionally empty
 
-        String body = objectMapper.writeValueAsString(new RequestBody(query, "EVAL", "conv_" + runId + "_" + caseId));
-        URI uri = URI.create(baseUrl + EVAL_CHAT_PATH);
+        // 使用 ObjectNode 显式写字段名，避免与全局 Jackson SNAKE_CASE 对 Java record 的序列化细节耦合导致下游解析异常。
+        ObjectNode payload = objectMapper.createObjectNode();
+        payload.put("query", query == null ? "" : query);
+        payload.put("mode", "EVAL");
+        payload.put("conversation_id", "conv_" + runId + "_" + caseId);
+        String body = objectMapper.writeValueAsString(payload);
+
+        URI uri = toEvalChatUri(baseUrl);
 
         HttpRequest req = HttpRequest.newBuilder()
                 .uri(uri)
@@ -81,7 +88,17 @@ public class TargetClient {
                 .findFirst();
     }
 
-    private record RequestBody(String query, String mode, String conversationId) {
+    static URI toEvalChatUri(String baseUrl) {
+        if (baseUrl == null || baseUrl.isBlank()) {
+            throw new IllegalArgumentException("baseUrl is blank");
+        }
+        String b = baseUrl.trim();
+        while (b.endsWith("/")) {
+            b = b.substring(0, b.length() - 1);
+        }
+        String path = EVAL_CHAT_PATH.startsWith("/") ? EVAL_CHAT_PATH.substring(1) : EVAL_CHAT_PATH;
+        URI base = URI.create(b);
+        return base.resolve(path);
     }
 }
 
