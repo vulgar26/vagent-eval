@@ -1,0 +1,25 @@
+{
+  "__文档说明": "【非线上 API 字段】本 JSON 仅供文档/验收展示字段形态。真实响应见运行 scripts/day10-export-demo 生成的 out/day10-report.json；服务端返回不含本键。",
+  "report_version": "run.report.v1",
+  "run_id": "run_<REDACTED>",
+  "total_cases": 2,
+  "completed_cases": 2,
+  "results_count": 2,
+  "pass_count": 1,
+  "skipped_count": 0,
+  "fail_count": 1,
+  "rate_denominator": "total_cases",
+  "pass_rate": 0.5,
+  "skipped_rate": 0.0,
+  "latency_sample_count": 2,
+  "p95_method": "nearest_rank_ceiling",
+  "p95_latency_ms": 42,
+  "error_code_top_n": 5,
+  "error_code_counts": [
+    {
+      "error_code": "CONTRACT_VIOLATION",
+      "count": 1
+    }
+  ],
+  "markdown_summary": "# run.report v1 - `run_<REDACTED>`\n\n- pass_rate: 0.5000 (denominator: total_cases)\n- skipped_rate: 0.0000\n- p95_latency_ms: 42 ms (nearest_rank_ceiling)\n\n## error_code TopN\n- CONTRACT_VIOLATION x 1\n"
+}

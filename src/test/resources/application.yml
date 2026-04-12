@@ -1,0 +1,8 @@
+# 测试默认打开评测管理 API，避免既有用例被 Day9 Filter 全部 404。
+# 专项安全用例见独立测试类上的 @TestPropertySource / @DynamicPropertySource。
+eval:
+  api:
+    enabled: true
+    token-hash: ""
+    allow-cidrs: []
+    require-https: false

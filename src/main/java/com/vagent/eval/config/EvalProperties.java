@@ -18,6 +18,7 @@ import java.util.List;
  *   api:                   → {@link #api}
  *     enabled: false       → {@link Api#enabled}
  *     token-hash: ""      → {@link Api#tokenHash}
+ *     allow-cidrs: [...]  → {@link Api#getAllowCidrs}
  *     require-https: ...  → {@link Api#requireHttps}
  *   targets:               → {@link #targets}
  *     - target-id: vagent → {@link TargetConfig#targetId}
@@ -85,6 +86,12 @@ public class EvalProperties {
         /** 仅存 hash，禁止明文 token；Day1 仅占位，Filter 校验在后续里程碑接入。 */
         private String tokenHash = "";
 
+        /**
+         * Day9：允许调用评测管理 API 的客户端网段（CIDR）；<strong>空列表</strong>表示不启用 IP 限制（仅依赖 token 等）。
+         * YAML：{@code allow-cidrs: [ "10.0.0.0/8", "127.0.0.1/32" ]}
+         */
+        private List<String> allowCidrs = new ArrayList<>();
+
         private boolean requireHttps = true;
 
         public boolean isEnabled() {
@@ -101,6 +108,14 @@ public class EvalProperties {
 
         public void setTokenHash(String tokenHash) {
             this.tokenHash = tokenHash;
+        }
+
+        public List<String> getAllowCidrs() {
+            return allowCidrs;
+        }
+
+        public void setAllowCidrs(List<String> allowCidrs) {
+            this.allowCidrs = allowCidrs == null ? new ArrayList<>() : allowCidrs;
         }
 
         public boolean isRequireHttps() {

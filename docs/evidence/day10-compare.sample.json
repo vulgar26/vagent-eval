@@ -1,0 +1,16 @@
+{
+  "__文档说明": "【非线上 API 字段】本 JSON 仅供文档/验收展示 compare 响应形态。真实文件见 out/day10-compare.json；服务端返回不含本键。",
+  "compare_version": "compare.v1",
+  "dataset_id": "ds_<REDACTED>",
+  "base_run_id": "run_<REDACTED_BASE>",
+  "cand_run_id": "run_<REDACTED_CAND>",
+  "base_pass_rate": 0.5,
+  "cand_pass_rate": 0.5,
+  "pass_rate_delta": 0.0,
+  "pass_rate_delta_note": "cand_pass_rate - base_pass_rate; pass_rate from run.report v1 (denominator total_cases)",
+  "regressions": [],
+  "improvements": [],
+  "missing_in_cand": [],
+  "missing_in_base": [],
+  "markdown_summary": "# compare v1: `run_<REDACTED_BASE>` (base) vs `run_<REDACTED_CAND>` (cand)\n\n- pass_rate_delta: 0.0000 (cand - base)\n\n## regressions (case_id)\n(none)\n\n## improvements\n(none)\n\n## missing_in_cand\n(none)\n"
+}

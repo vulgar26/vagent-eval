@@ -56,7 +56,7 @@ class VagentEvalApplicationTests {
     void internalStatusExposesTargets() throws Exception {
         mockMvc.perform(get("/internal/eval/status"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.eval_api_enabled").value(false))
+                .andExpect(jsonPath("$.eval_api_enabled").value(true))
                 .andExpect(jsonPath("$.targets[0].target_id").value("vagent"))
                 .andExpect(jsonPath("$.targets[0].enabled").value(true))
                 .andExpect(jsonPath("$.targets[0].base_url_origin").value("http://localhost:8080"));

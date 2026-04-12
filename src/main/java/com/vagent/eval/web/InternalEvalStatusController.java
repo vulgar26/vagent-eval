@@ -18,7 +18,7 @@ import java.util.stream.Collectors;
  * 运维/排障用的「最小可读状态」：证明 eval 进程已启动，且 {@link EvalProperties} 里的 target 列表已加载。
  * <p>
  * 与 {@code /actuator/health} 分工：后者是 Spring 通用存活探针；本接口额外返回<strong>业务配置视角</strong>（eval_api、targets 摘要）。
- * 生产环境应仅内网或管理员可达；Day1 未接鉴权，后续与 {@code eval.api.enabled}、token-hash、审计对齐（见 eval-upgrade.md）。
+ * 生产环境应仅内网或管理员可达；Day9 起管理面见 {@code /api/v1/eval/**}（除 chat）的 Filter；本 {@code /internal/eval} 路径仍建议网络层收口。
  */
 @RestController
 @RequestMapping(path = "/internal/eval", produces = MediaType.APPLICATION_JSON_VALUE)

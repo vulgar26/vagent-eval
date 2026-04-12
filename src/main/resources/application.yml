@@ -19,6 +19,8 @@ eval:
   api:
     enabled: false
     token-hash: ""
+    # Day9：非空则仅允许所列 CIDR 访问管理 API；空则不做 IP 限制
+    allow-cidrs: []
     require-https: false
   targets:
     - target-id: vagent
