@@ -39,6 +39,20 @@ class VagentEvalApplicationTests {
     }
 
     @Test
+    void runReportNotFoundReturns404() throws Exception {
+        mockMvc.perform(get("/api/v1/eval/runs/run_does_not_exist/report"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void compareNotFoundReturns404() throws Exception {
+        mockMvc.perform(get("/api/v1/eval/compare")
+                        .param("base_run_id", "run_missing_a")
+                        .param("cand_run_id", "run_missing_b"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
     void internalStatusExposesTargets() throws Exception {
         mockMvc.perform(get("/internal/eval/status"))
                 .andExpect(status().isOk())

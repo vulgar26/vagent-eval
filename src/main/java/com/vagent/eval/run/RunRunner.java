@@ -16,10 +16,13 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 
 /**
- * Day3：串行执行器。
+ * Day3/Day6：串行执行器。
  * <p>
  * 人话：把一个 dataset 的所有题按顺序发给 target，一题一条结果地记录下来。
  * 取消逻辑：每跑下一题前检查 cancelRequested，若为 true 则停止并把 run 标记为 CANCELLED。
+ * <p>
+ * Day6：每题调用 {@link TargetClient#postEvalChat} 时已带上 membership 相关头；
+ * 调用 {@link RunEvaluator#evaluate} 时传入 {@code run.targetId()}，供 {@link CitationMembership} 绑定 target。
  */
 @Component
 public class RunRunner {
@@ -93,6 +96,11 @@ public class RunRunner {
         }
     }
 
+    /**
+     * 执行单道 case：HTTP 调用 +（成功路径下）{@link RunEvaluator} 判定，并组装 {@link EvalResult}。
+     * <p>
+     * 异常与超时在非 2xx 分支外统一落入 {@code UPSTREAM_UNAVAILABLE} / {@code TIMEOUT} 等，避免线程静默死。
+     */
     private EvalResult runOneCase(EvalRun run, String baseUrl, EvalCase c) {
         Instant now = Instant.now();
         Map<String, Object> debug = new HashMap<>();
@@ -121,7 +129,7 @@ public class RunRunner {
                     return new EvalResult(run.runId(), run.datasetId(), run.targetId(), c.caseId(), verdict,
                             errorCode, latencyMs, now, debug);
                 }
-                RunEvaluator.EvalOutcome o = evaluator.evaluate(c, tr.json());
+                RunEvaluator.EvalOutcome o = evaluator.evaluate(c, tr.json(), run.targetId());
                 verdict = o.verdict();
                 errorCode = o.errorCode() == null ? null : o.errorCode();
                 debug.putAll(o.debug());

@@ -1,6 +1,7 @@
 package com.vagent.eval.web;
 
 import org.junit.jupiter.api.Test;
+import com.vagent.eval.run.TargetClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -49,9 +50,21 @@ class EvalProbeChatIntegrationTest {
     void probeCitationsOkIncludesSources() throws Exception {
         mockMvc.perform(post("/api/v1/eval/chat")
                         .contentType(MediaType.APPLICATION_JSON)
+                        .header(TargetClient.HDR_MEMBERSHIP_TOP_N, "8")
                         .content("{\"query\":\"CITATIONS_OK\",\"mode\":\"EVAL\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.capabilities.retrieval.supported").value(true))
-                .andExpect(jsonPath("$.sources[0].id").value("kb_chunk_1"));
+                .andExpect(jsonPath("$.sources[0].id").value("KB_CHUNK_1"))
+                .andExpect(jsonPath("$.retrieval_hits[0].id").value("kb_chunk_1"));
+    }
+
+    @Test
+    void probeCitationsBadMemberReturnsMismatchedSource() throws Exception {
+        mockMvc.perform(post("/api/v1/eval/chat")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"query\":\"CITATIONS_BAD_MEMBER\",\"mode\":\"EVAL\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.retrieval_hits[0].id").value("only_hit"))
+                .andExpect(jsonPath("$.sources[0].id").value("forged_chunk"));
     }
 }

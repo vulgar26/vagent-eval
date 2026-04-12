@@ -5,12 +5,12 @@ server:
   port: 8099
 
 eval:
+  membership:
+    salt: "<CONFIGURE_VIA_ENV_NOT_PLAINTEXT_IN_REPO>"
+    top-n: 8
   api:
     enabled: true
     token-hash: "<HMAC_OR_BCRYPT_OF_TOKEN>"
-    allow-cidrs:
-      - 127.0.0.1/32
-      - 10.0.0.0/8
     require-https: true
   targets:
     - target-id: vagent

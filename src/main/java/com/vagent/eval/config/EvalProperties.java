@@ -1,5 +1,8 @@
 package com.vagent.eval.config;
 
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
 
@@ -15,12 +18,14 @@ import java.util.List;
  *   api:                   → {@link #api}
  *     enabled: false       → {@link Api#enabled}
  *     token-hash: ""      → {@link Api#tokenHash}
- *     allow-cidrs: [...]  → {@link Api#allowCidrs}
  *     require-https: ...  → {@link Api#requireHttps}
  *   targets:               → {@link #targets}
  *     - target-id: vagent → {@link TargetConfig#targetId}
  *       base-url: ...     → {@link TargetConfig#baseUrl}
  *       enabled: true     → {@link TargetConfig#enabled}
+ *   membership:            → {@link #membership}
+ *     salt: ...           → {@link Membership#salt}
+ *     top-n: 8           → {@link Membership#topN}
  * </pre>
  * 与 SSOT 对齐：发起方侧前缀为 {@code eval.api.*}；多 target 的基址列表即 {@code eval.targets}。
  * 注意：对外 HTTP JSON（API 响应、dataset）必须用 snake_case；这里是<strong>内部配置对象</strong>，用 Java 驼峰即可。
@@ -40,6 +45,14 @@ public class EvalProperties {
      */
     private List<TargetConfig> targets = new ArrayList<>();
 
+    /**
+     * Day6：引用 membership 判定参数（盐、候选集前 N 条）。
+     * <p>
+     * YAML 键示例：{@code eval.membership.salt}、{@code eval.membership.top-n}。
+     */
+    @Valid
+    private Membership membership = new Membership();
+
     public Api getApi() {
         return api;
     }
@@ -56,6 +69,14 @@ public class EvalProperties {
         this.targets = targets;
     }
 
+    public Membership getMembership() {
+        return membership;
+    }
+
+    public void setMembership(Membership membership) {
+        this.membership = membership == null ? new Membership() : membership;
+    }
+
     public static class Api {
 
         /** 默认 false：与 eval-upgrade 建议一致，避免误暴露评测入口。 */
@@ -63,8 +84,6 @@ public class EvalProperties {
 
         /** 仅存 hash，禁止明文 token；Day1 仅占位，Filter 校验在后续里程碑接入。 */
         private String tokenHash = "";
-
-        private List<String> allowCidrs = new ArrayList<>();
 
         private boolean requireHttps = true;
 
@@ -82,14 +101,6 @@ public class EvalProperties {
 
         public void setTokenHash(String tokenHash) {
             this.tokenHash = tokenHash;
-        }
-
-        public List<String> getAllowCidrs() {
-            return allowCidrs;
-        }
-
-        public void setAllowCidrs(List<String> allowCidrs) {
-            this.allowCidrs = allowCidrs;
         }
 
         public boolean isRequireHttps() {
@@ -133,6 +144,45 @@ public class EvalProperties {
 
         public void setEnabled(boolean enabled) {
             this.enabled = enabled;
+        }
+    }
+
+    /**
+     * Day6：hashed membership 的配置块。
+     * <p>
+     * {@link #salt} 会通过 {@code X-Eval-Membership-Salt} 随请求传递，使被测侧构造的
+     * {@code retrieval_hits} 与评测侧 {@link com.vagent.eval.run.CitationMembership} 使用同一派生规则。
+     * {@link #topN} 表示：对响应中 {@code retrieval_hits} 数组<strong>按检索排序后的前 N 个元素</strong>
+     * 视为合法候选；超出部分不参与 membership（与 SSOT「前 N 口径」对齐时可在此调 N）。
+     */
+    public static class Membership {
+
+        /**
+         * 参与 SHA-256 输入串的盐；生产应使用足够熵的密钥化材料，且勿写入仓库明文。
+         */
+        private String salt = "";
+
+        /**
+         * 候选集截断上界：仅取 {@code retrieval_hits} 前 {@code topN} 条参与集合构造。
+         */
+        @Min(1)
+        @Max(256)
+        private int topN = 8;
+
+        public String getSalt() {
+            return salt;
+        }
+
+        public void setSalt(String salt) {
+            this.salt = salt == null ? "" : salt;
+        }
+
+        public int getTopN() {
+            return topN;
+        }
+
+        public void setTopN(int topN) {
+            this.topN = topN;
         }
     }
 }

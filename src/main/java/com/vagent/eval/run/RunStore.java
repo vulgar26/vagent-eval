@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -92,17 +93,43 @@ public class RunStore {
         st.completedCases.incrementAndGet();
     }
 
+    /**
+     * 分页返回某 run 的结果；{@code caseIdFilter} 非空时先按 {@link EvalResult#caseId()} 精确匹配再分页（Day8 便于从 compare 直达单题）。
+     */
     public List<EvalResult> listResults(String runId, int offset, int limit) {
+        return listResults(runId, offset, limit, null);
+    }
+
+    public List<EvalResult> listResults(String runId, int offset, int limit, String caseIdFilter) {
         List<EvalResult> list = resultsByRunId.get(runId);
         if (list == null) {
             throw new IllegalArgumentException("run not found");
         }
+        List<EvalResult> source = list;
+        if (caseIdFilter != null && !caseIdFilter.isBlank()) {
+            String cid = caseIdFilter.trim();
+            source = list.stream().filter(r -> cid.equals(r.caseId())).collect(Collectors.toList());
+        }
         int from = Math.max(0, offset);
-        int to = Math.min(list.size(), from + Math.max(0, limit));
+        int to = Math.min(source.size(), from + Math.max(0, limit));
         if (from >= to) {
             return List.of();
         }
-        return List.copyOf(list.subList(from, to));
+        return List.copyOf(source.subList(from, to));
+    }
+
+    /**
+     * Day7：报表聚合需要完整结果集，不分页；返回不可变拷贝，避免外部修改内部列表。
+     *
+     * @param runId 已存在的 run
+     * @return 当前已追加的所有 {@link EvalResult}，顺序同写入顺序
+     */
+    public List<EvalResult> listAllResults(String runId) {
+        List<EvalResult> list = resultsByRunId.get(runId);
+        if (list == null) {
+            throw new IllegalArgumentException("run not found");
+        }
+        return List.copyOf(list);
     }
 
     private RunState mustGet(String runId) {

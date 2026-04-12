@@ -9,14 +9,16 @@ spring:
 
 # 对外 JSON / API 字段以 snake_case 为准；此处为服务配置，使用 kebab-case 与 SSOT 对齐。
 eval:
+  # Day6：引用 membership（盐与候选前 N）；生产勿提交真实盐明文
+  membership:
+    salt: "p0-local-dev"
+    top-n: 8
   # 仅本地验收 Day4 契约时可设为 true，会注册 /api/v1/eval/chat 探针（默认 false）
   probe:
     enabled: true
   api:
     enabled: false
     token-hash: ""
-    allow-cidrs:
-      - 127.0.0.1/32
     require-https: false
   targets:
     - target-id: vagent

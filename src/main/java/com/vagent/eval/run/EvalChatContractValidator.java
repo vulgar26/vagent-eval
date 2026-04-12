@@ -29,7 +29,14 @@ public class EvalChatContractValidator {
     }
 
     /**
+     * 校验 eval/chat 响应是否满足 P0 附录中的「最小必填」形状。
+     * <p>
+     * <strong>与 Day6 的分工</strong>：本方法<strong>不</strong>校验 {@code retrieval_hits}、{@code sources} 的语义与 membership；
+     * 那些由 {@link RunEvaluator} 在业务分支中处理，以便区分 {@link ErrorCode#CONTRACT_VIOLATION} 与
+     * {@link ErrorCode#SOURCE_NOT_IN_HITS} 等不同归因。
+     *
      * @param root 已解析成功的 JSON 根节点（非 null）
+     * @return 通过时 {@link ContractOutcome#ok()} 为 true；失败时带固定 {@link ErrorCode#CONTRACT_VIOLATION} 与简短 reason 机器码
      */
     public ContractOutcome validate(JsonNode root) {
         if (root == null || root.isNull()) {

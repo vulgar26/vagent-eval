@@ -1,6 +1,7 @@
 package com.vagent.eval.run;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.vagent.eval.config.EvalProperties;
 import com.vagent.eval.dataset.EvalExpectedBehavior;
 import com.vagent.eval.dataset.Model.EvalCase;
 import com.vagent.eval.run.RunEvaluator.EvalOutcome;
@@ -13,13 +14,23 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+/**
+ * {@link RunEvaluator} 单测：构造最小 JSON，不启动 Spring 容器。
+ */
 class RunEvaluatorTest {
 
     private final ObjectMapper om = new ObjectMapper();
-    private final RunEvaluator evaluator = new RunEvaluator(new EvalChatContractValidator());
+
+    private static EvalProperties props(String salt, int topN) {
+        EvalProperties p = new EvalProperties();
+        p.getMembership().setSalt(salt);
+        p.getMembership().setTopN(topN);
+        return p;
+    }
 
     @Test
     void toolExpected_toolsUnsupported_skippedEvenIfBehaviorAnswer() throws Exception {
+        RunEvaluator evaluator = new RunEvaluator(new EvalChatContractValidator(), props("", 8));
         String json = """
                 {
                   "answer": "probe ok",
@@ -41,9 +52,118 @@ class RunEvaluatorTest {
                 List.of(),
                 Instant.parse("2026-04-10T00:00:00Z")
         );
-        EvalOutcome o = evaluator.evaluate(c, om.readTree(json));
+        EvalOutcome o = evaluator.evaluate(c, om.readTree(json), "probe");
         assertThat(o.verdict()).isEqualTo(Verdict.SKIPPED_UNSUPPORTED);
         assertThat(o.errorCode()).isEqualTo(ErrorCode.SKIPPED_UNSUPPORTED);
         assertThat(o.debug()).containsEntry("verdict_reason", "tools_unsupported");
+    }
+
+    @Test
+    void citations_membership_pass_canonicalCase() throws Exception {
+        RunEvaluator evaluator = new RunEvaluator(new EvalChatContractValidator(), props("test-salt", 8));
+        String json = """
+                {
+                  "answer": "ok",
+                  "behavior": "answer",
+                  "latency_ms": 1,
+                  "capabilities": {
+                    "retrieval": {"supported": true, "score": false},
+                    "tools": {"supported": true, "outcome": true}
+                  },
+                  "meta": {"mode": "EVAL"},
+                  "retrieval_hits": [
+                    {"id": "kb_chunk_1", "title": "h1", "snippet": "a"}
+                  ],
+                  "sources": [
+                    {"id": "KB_CHUNK_1", "title": "t1", "snippet": "s1"}
+                  ]
+                }
+                """;
+        EvalCase c = new EvalCase(
+                "d6_ok",
+                "ds",
+                "CITATIONS_OK",
+                EvalExpectedBehavior.ANSWER,
+                true,
+                List.of(),
+                Instant.parse("2026-04-10T00:00:00Z")
+        );
+        EvalOutcome o = evaluator.evaluate(c, om.readTree(json), "probe");
+        assertThat(o.verdict()).isEqualTo(Verdict.PASS);
+        assertThat(o.errorCode()).isNull();
+        assertThat(o.debug()).containsEntry("membership_ok", true);
+        assertThat(o.debug()).containsEntry("eval_rule_version", RunEvaluator.EVAL_RULE_VERSION);
+    }
+
+    @Test
+    void citations_membership_fail_sourceNotInHits() throws Exception {
+        RunEvaluator evaluator = new RunEvaluator(new EvalChatContractValidator(), props("test-salt", 8));
+        String json = """
+                {
+                  "answer": "ok",
+                  "behavior": "answer",
+                  "latency_ms": 1,
+                  "capabilities": {
+                    "retrieval": {"supported": true, "score": false},
+                    "tools": {"supported": true, "outcome": true}
+                  },
+                  "meta": {"mode": "EVAL"},
+                  "retrieval_hits": [
+                    {"id": "only_hit", "title": "h1", "snippet": "a"}
+                  ],
+                  "sources": [
+                    {"id": "forged_chunk", "title": "t1", "snippet": "s1"}
+                  ]
+                }
+                """;
+        EvalCase c = new EvalCase(
+                "d6_bad",
+                "ds",
+                "CITATIONS_BAD_MEMBER",
+                EvalExpectedBehavior.ANSWER,
+                true,
+                List.of(),
+                Instant.parse("2026-04-10T00:00:00Z")
+        );
+        EvalOutcome o = evaluator.evaluate(c, om.readTree(json), "probe");
+        assertThat(o.verdict()).isEqualTo(Verdict.FAIL);
+        assertThat(o.errorCode()).isEqualTo(ErrorCode.SOURCE_NOT_IN_HITS);
+        assertThat(o.debug()).containsEntry("verdict_reason", "source_not_in_hits");
+    }
+
+    @Test
+    void citations_membership_topN_excludesSecondHit() throws Exception {
+        RunEvaluator evaluator = new RunEvaluator(new EvalChatContractValidator(), props("test-salt", 1));
+        String json = """
+                {
+                  "answer": "ok",
+                  "behavior": "answer",
+                  "latency_ms": 1,
+                  "capabilities": {
+                    "retrieval": {"supported": true, "score": false},
+                    "tools": {"supported": true, "outcome": true}
+                  },
+                  "meta": {"mode": "EVAL"},
+                  "retrieval_hits": [
+                    {"id": "first", "title": "a", "snippet": "a"},
+                    {"id": "second", "title": "b", "snippet": "b"}
+                  ],
+                  "sources": [
+                    {"id": "second", "title": "t", "snippet": "s"}
+                  ]
+                }
+                """;
+        EvalCase c = new EvalCase(
+                "d6_topn",
+                "ds",
+                "x",
+                EvalExpectedBehavior.ANSWER,
+                true,
+                List.of(),
+                Instant.parse("2026-04-10T00:00:00Z")
+        );
+        EvalOutcome o = evaluator.evaluate(c, om.readTree(json), "probe");
+        assertThat(o.verdict()).isEqualTo(Verdict.FAIL);
+        assertThat(o.errorCode()).isEqualTo(ErrorCode.SOURCE_NOT_IN_HITS);
     }
 }
