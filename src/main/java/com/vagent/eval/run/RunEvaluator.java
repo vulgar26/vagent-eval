@@ -2,7 +2,6 @@ package com.vagent.eval.run;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.vagent.eval.config.EvalProperties;
-import com.vagent.eval.dataset.EvalExpectedBehavior;
 import com.vagent.eval.dataset.Model.EvalCase;
 import com.vagent.eval.run.EvalChatContractValidator.ContractOutcome;
 import com.vagent.eval.run.RunModel.ErrorCode;
@@ -11,7 +10,6 @@ import org.springframework.stereotype.Component;
 
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -42,7 +40,7 @@ public class RunEvaluator {
      * <p>
      * 出现在每条结果的 {@code debug.eval_rule_version}，便于报告追溯；规则语义变更后必须递增且勿与旧 run 混比。
      */
-    public static final String EVAL_RULE_VERSION = "p0.v3";
+    public static final String EVAL_RULE_VERSION = "p0.v4";
 
     private final EvalChatContractValidator contractValidator;
     private final EvalProperties evalProperties;
@@ -120,21 +118,23 @@ public class RunEvaluator {
                 debug.put("verdict_reason", "retrieval_unsupported");
                 return new EvalOutcome(Verdict.SKIPPED_UNSUPPORTED, ErrorCode.SKIPPED_UNSUPPORTED, debug);
             }
+            // P0+：requires_citations 约束仅对「会输出可核验主张」的 answer 路径生效。
+            // clarify/deny 等非 answer 行为可在检索为空或不可靠时不返回 sources，避免逼迫编造引用。
+            if (!"answer".equalsIgnoreCase(expectedBehavior)) {
+                debug.put("citations_enforced", false);
+                debug.put("citations_enforced_reason", "expected_behavior_not_answer");
+            } else {
             boolean sourcesEmpty = sources == null || !sources.isArray() || sources.size() < 1;
             if (sourcesEmpty) {
-                if (citationsExemptDenyEmptyRetrieve(c, behavior, respJson)) {
-                    debug.put("verdict_reason", "citations_exempt_expected_deny_no_retrieval_hits");
-                    debug.put("citations_exempt", true);
-                } else {
                     debug.put("verdict_reason", "missing_sources");
                     return new EvalOutcome(Verdict.FAIL, ErrorCode.CONTRACT_VIOLATION, debug);
-                }
             } else {
                 // Day6：引用必须落在检索候选（前 N 条 hits）的 hashed 集合内。
                 EvalOutcome membershipOutcome = verifyCitationMembership(respJson, sources, targetId, debug);
                 if (membershipOutcome != null) {
                     return membershipOutcome;
                 }
+            }
             }
         }
 
@@ -235,45 +235,6 @@ public class RunEvaluator {
     /**
      * 截断字符串用于 debug 输出，避免在结果表里灌入过长字段。
      */
-    /**
-     * P0+ §16.7：题集 {@code requires_citations=true} 不表示「凡题都必须有 {@code sources}」；
-     * 当期望与响应均为拒答（{@code deny}）且检索侧给出「0 命中」信号时，允许 {@code sources=[]}，
-     * 避免把「无命中故不得编造引用」误判为 {@code missing_sources}。
-     */
-    private static boolean citationsExemptDenyEmptyRetrieve(EvalCase c, String actualBehavior, JsonNode respJson) {
-        if (c.expectedBehavior() != EvalExpectedBehavior.DENY) {
-            return false;
-        }
-        if (!"deny".equalsIgnoreCase(actualBehavior)) {
-            return false;
-        }
-        return signalsEmptyRetrieval(respJson);
-    }
-
-    /**
-     * 「检索 0 命中」信号：根上 {@code retrieval_hits} 缺省、空数组，或 {@code meta} 中命中数为 0。
-     * 若显式给出非空 {@code retrieval_hits}，或 {@code meta} 中命中数 {@code >0}，则视为非空检索。
-     */
-    private static boolean signalsEmptyRetrieval(JsonNode respJson) {
-        JsonNode hits = respJson.get("retrieval_hits");
-        if (hits != null && !hits.isNull()) {
-            if (!hits.isArray()) {
-                return false;
-            }
-            return hits.size() == 0;
-        }
-        JsonNode meta = respJson.get("meta");
-        if (meta != null && meta.isObject()) {
-            for (String key : List.of("retrieve_hit_count", "retrieval_hit_count")) {
-                JsonNode n = meta.get(key);
-                if (n != null && n.isIntegralNumber()) {
-                    return n.intValue() == 0;
-                }
-            }
-        }
-        return true;
-    }
-
     private static String prefix(String s, int maxChars) {
         if (s == null) {
             return "";
