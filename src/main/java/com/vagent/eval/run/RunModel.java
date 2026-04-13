@@ -40,6 +40,10 @@ public final class RunModel {
         GUARDRAIL_TRIGGERED,
         SOURCE_NOT_IN_HITS,
         CONTRACT_VIOLATION,
+        /** P0+ S1：期望 {@code behavior} 与响应 {@code behavior} 不一致（原误报为 {@link #UNKNOWN}）。 */
+        BEHAVIOR_MISMATCH,
+        /** P0+ S1：期望 {@code tool} 路径但 {@code required&&used&&succeeded} 未满足（原误报为 {@link #UNKNOWN}）。 */
+        TOOL_EXPECTATION_NOT_MET,
         SECURITY_BOUNDARY_VIOLATION,
         POLICY_DISABLED,
         UNKNOWN,

@@ -9,6 +9,8 @@ spring:
 
 # 对外 JSON / API 字段以 snake_case 为准；此处为服务配置，使用 kebab-case 与 SSOT 对齐。
 eval:
+  # P0+：发往被测的 X-Eval-Token；可用 default-eval-token 或 targets[].eval-token（明文勿入库，见 application-example.yml）
+  default-eval-token: ""
   # Day6：引用 membership（盐与候选前 N）；生产勿提交真实盐明文
   membership:
     salt: "p0-local-dev"

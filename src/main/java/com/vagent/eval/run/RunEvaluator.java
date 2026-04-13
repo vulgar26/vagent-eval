@@ -2,6 +2,7 @@ package com.vagent.eval.run;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.vagent.eval.config.EvalProperties;
+import com.vagent.eval.dataset.EvalExpectedBehavior;
 import com.vagent.eval.dataset.Model.EvalCase;
 import com.vagent.eval.run.EvalChatContractValidator.ContractOutcome;
 import com.vagent.eval.run.RunModel.ErrorCode;
@@ -10,6 +11,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -23,7 +25,8 @@ import java.util.Set;
  *   <li>若期望 {@code tool} 但 {@code tools.supported=false} — 语义上无法评测 tool 路径，直接
  *       {@link Verdict#SKIPPED_UNSUPPORTED}（与 Day5 一致，且必须先于 behavior 字符串严格相等比对）；</li>
  *   <li>{@code expected_behavior} 与 {@code behavior} 文本一致；</li>
- *   <li>{@code requires_citations}：检索不支持则跳过；否则要求非空 {@code sources}；</li>
+ *   <li>{@code requires_citations}：检索不支持则跳过；否则一般要求非空 {@code sources}；
+ *       <strong>P0+ §16.7</strong>：期望与实际均为 {@code deny} 且检索 0 命中信号时允许空 {@code sources}；</li>
  *   <li><strong>Day6</strong>：在 citations 路径上要求 {@code retrieval_hits}，对其前 N 条做 hashed membership，
  *       保证每条 source 的 id 落在候选集内，否则 {@link ErrorCode#SOURCE_NOT_IN_HITS}；</li>
  *   <li>最后处理 {@code expected_behavior=tool} 且工具已声明支持时的 {@code tool} 块细节。</li>
@@ -35,11 +38,11 @@ import java.util.Set;
 public class RunEvaluator {
 
     /**
-     * P0 判定器版本号：Day6 引入 hashed membership 后与 Day5 规则不兼容处递增次版本。
+     * P0 判定器版本号：Day6 引入 hashed membership；P0+ §16.7（deny+空检索豁免空 {@code sources}）起为 {@code p0.v3}。
      * <p>
-     * 出现在每条结果的 {@code debug.eval_rule_version}，便于报告追溯。
+     * 出现在每条结果的 {@code debug.eval_rule_version}，便于报告追溯；规则语义变更后必须递增且勿与旧 run 混比。
      */
-    public static final String EVAL_RULE_VERSION = "p0.v2";
+    public static final String EVAL_RULE_VERSION = "p0.v3";
 
     private final EvalChatContractValidator contractValidator;
     private final EvalProperties evalProperties;
@@ -106,7 +109,7 @@ public class RunEvaluator {
 
         if (!expectedBehavior.equalsIgnoreCase(behavior)) {
             debug.put("verdict_reason", "behavior_mismatch");
-            return new EvalOutcome(Verdict.FAIL, ErrorCode.UNKNOWN, debug);
+            return new EvalOutcome(Verdict.FAIL, ErrorCode.BEHAVIOR_MISMATCH, debug);
         }
 
         if (c.requiresCitations()) {
@@ -114,14 +117,21 @@ public class RunEvaluator {
                 debug.put("verdict_reason", "retrieval_unsupported");
                 return new EvalOutcome(Verdict.SKIPPED_UNSUPPORTED, ErrorCode.SKIPPED_UNSUPPORTED, debug);
             }
-            if (sources == null || !sources.isArray() || sources.size() < 1) {
-                debug.put("verdict_reason", "missing_sources");
-                return new EvalOutcome(Verdict.FAIL, ErrorCode.CONTRACT_VIOLATION, debug);
-            }
-            // Day6：引用必须落在检索候选（前 N 条 hits）的 hashed 集合内。
-            EvalOutcome membershipOutcome = verifyCitationMembership(respJson, sources, targetId, debug);
-            if (membershipOutcome != null) {
-                return membershipOutcome;
+            boolean sourcesEmpty = sources == null || !sources.isArray() || sources.size() < 1;
+            if (sourcesEmpty) {
+                if (citationsExemptDenyEmptyRetrieve(c, behavior, respJson)) {
+                    debug.put("verdict_reason", "citations_exempt_expected_deny_no_retrieval_hits");
+                    debug.put("citations_exempt", true);
+                } else {
+                    debug.put("verdict_reason", "missing_sources");
+                    return new EvalOutcome(Verdict.FAIL, ErrorCode.CONTRACT_VIOLATION, debug);
+                }
+            } else {
+                // Day6：引用必须落在检索候选（前 N 条 hits）的 hashed 集合内。
+                EvalOutcome membershipOutcome = verifyCitationMembership(respJson, sources, targetId, debug);
+                if (membershipOutcome != null) {
+                    return membershipOutcome;
+                }
             }
         }
 
@@ -139,7 +149,7 @@ public class RunEvaluator {
             debug.put("tool_succeeded", succeeded);
             if (!(required && used && succeeded)) {
                 debug.put("verdict_reason", "tool_not_satisfied");
-                return new EvalOutcome(Verdict.FAIL, ErrorCode.UNKNOWN, debug);
+                return new EvalOutcome(Verdict.FAIL, ErrorCode.TOOL_EXPECTATION_NOT_MET, debug);
             }
         }
 
@@ -222,6 +232,45 @@ public class RunEvaluator {
     /**
      * 截断字符串用于 debug 输出，避免在结果表里灌入过长字段。
      */
+    /**
+     * P0+ §16.7：题集 {@code requires_citations=true} 不表示「凡题都必须有 {@code sources}」；
+     * 当期望与响应均为拒答（{@code deny}）且检索侧给出「0 命中」信号时，允许 {@code sources=[]}，
+     * 避免把「无命中故不得编造引用」误判为 {@code missing_sources}。
+     */
+    private static boolean citationsExemptDenyEmptyRetrieve(EvalCase c, String actualBehavior, JsonNode respJson) {
+        if (c.expectedBehavior() != EvalExpectedBehavior.DENY) {
+            return false;
+        }
+        if (!"deny".equalsIgnoreCase(actualBehavior)) {
+            return false;
+        }
+        return signalsEmptyRetrieval(respJson);
+    }
+
+    /**
+     * 「检索 0 命中」信号：根上 {@code retrieval_hits} 缺省、空数组，或 {@code meta} 中命中数为 0。
+     * 若显式给出非空 {@code retrieval_hits}，或 {@code meta} 中命中数 {@code >0}，则视为非空检索。
+     */
+    private static boolean signalsEmptyRetrieval(JsonNode respJson) {
+        JsonNode hits = respJson.get("retrieval_hits");
+        if (hits != null && !hits.isNull()) {
+            if (!hits.isArray()) {
+                return false;
+            }
+            return hits.size() == 0;
+        }
+        JsonNode meta = respJson.get("meta");
+        if (meta != null && meta.isObject()) {
+            for (String key : List.of("retrieve_hit_count", "retrieval_hit_count")) {
+                JsonNode n = meta.get(key);
+                if (n != null && n.isIntegralNumber()) {
+                    return n.intValue() == 0;
+                }
+            }
+        }
+        return true;
+    }
+
     private static String prefix(String s, int maxChars) {
         if (s == null) {
             return "";

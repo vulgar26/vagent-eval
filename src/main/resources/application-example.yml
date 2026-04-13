@@ -5,6 +5,8 @@ server:
   port: 8099
 
 eval:
+  # 与被测 vagent.eval.api 等配置的明文 token 一致；勿写入仓库，用环境变量注入
+  default-eval-token: ""
   membership:
     salt: "<CONFIGURE_VIA_ENV_NOT_PLAINTEXT_IN_REPO>"
     top-n: 8
@@ -17,7 +19,9 @@ eval:
   targets:
     - target-id: vagent
       base-url: https://vagent.internal.example
+      eval-token: ""
       enabled: true
     - target-id: travel-ai
       base-url: https://travel-ai.internal.example
+      eval-token: ""
       enabled: false

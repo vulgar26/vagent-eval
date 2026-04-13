@@ -20,9 +20,11 @@ import java.util.List;
  *     token-hash: ""      → {@link Api#tokenHash}
  *     allow-cidrs: [...]  → {@link Api#getAllowCidrs}
  *     require-https: ...  → {@link Api#requireHttps}
+ *   default-eval-token: "" → {@link #defaultEvalToken}
  *   targets:               → {@link #targets}
  *     - target-id: vagent → {@link TargetConfig#targetId}
  *       base-url: ...     → {@link TargetConfig#baseUrl}
+ *       eval-token: ""    → {@link TargetConfig#getEvalToken}
  *       enabled: true     → {@link TargetConfig#enabled}
  *   membership:            → {@link #membership}
  *     salt: ...           → {@link Membership#salt}
@@ -54,6 +56,12 @@ public class EvalProperties {
     @Valid
     private Membership membership = new Membership();
 
+    /**
+     * P0+：调用被测 {@code POST /api/v1/eval/chat} 时写入 {@code X-Eval-Token} 的默认明文；
+     * per-target 见 {@link TargetConfig#getEvalToken()}。明文勿提交仓库，用环境变量或本地覆盖文件注入。
+     */
+    private String defaultEvalToken = "";
+
     public Api getApi() {
         return api;
     }
@@ -76,6 +84,14 @@ public class EvalProperties {
 
     public void setMembership(Membership membership) {
         this.membership = membership == null ? new Membership() : membership;
+    }
+
+    public String getDefaultEvalToken() {
+        return defaultEvalToken;
+    }
+
+    public void setDefaultEvalToken(String defaultEvalToken) {
+        this.defaultEvalToken = defaultEvalToken == null ? "" : defaultEvalToken;
     }
 
     public static class Api {
@@ -137,6 +153,9 @@ public class EvalProperties {
 
         private boolean enabled = true;
 
+        /** 覆盖 {@link EvalProperties#defaultEvalToken}；仅当非空时使用。 */
+        private String evalToken = "";
+
         public String getTargetId() {
             return targetId;
         }
@@ -159,6 +178,14 @@ public class EvalProperties {
 
         public void setEnabled(boolean enabled) {
             this.enabled = enabled;
+        }
+
+        public String getEvalToken() {
+            return evalToken;
+        }
+
+        public void setEvalToken(String evalToken) {
+            this.evalToken = evalToken == null ? "" : evalToken;
         }
     }
 

@@ -23,6 +23,8 @@ import java.util.Optional;
  * <strong>Day6 补充</strong>：除原有的 {@code X-Eval-Run-Id} 等头外，增加 {@code X-Eval-Membership-Salt}、
  * {@code X-Eval-Membership-Top-N}，使被测侧（或本地 {@link com.vagent.eval.web.EvalProbeChatController}）
  * 能按与 {@link CitationMembership} 一致的盐与「前 N」口径构造 {@code retrieval_hits}。
+ * <strong>P0+</strong>：{@code X-Eval-Token} 来自 {@link EvalProperties#getDefaultEvalToken()} 与
+ * {@link EvalProperties.TargetConfig#getEvalToken()}（见 {@link #resolveEvalToken}），供被测填充 {@code meta.retrieval_hit_id_hashes} 等观测路径。
  */
 @Component
 public class TargetClient {
@@ -74,8 +76,7 @@ public class TargetClient {
     public TargetResponse postEvalChat(String targetId, String baseUrl, String runId, String datasetId, String caseId, String query) throws Exception {
         long t0 = System.nanoTime();
 
-        // P0：token 还未接入（Day4/Day5 接安全边界）。先按 SSOT 预留头位。
-        String token = ""; // intentionally empty
+        String token = resolveEvalToken(targetId);
 
         // 使用 ObjectNode 显式写字段名，避免与全局 Jackson SNAKE_CASE 对 Java record 的序列化细节耦合导致下游解析异常。
         ObjectNode payload = objectMapper.createObjectNode();
@@ -113,6 +114,24 @@ public class TargetClient {
         } catch (Exception ignored) {
         }
         return new TargetResponse(resp.statusCode(), json, latencyMs);
+    }
+
+    /**
+     * 解析发往被测端的 {@code X-Eval-Token}：优先匹配 {@code eval.targets[].eval-token}，否则
+     * {@link EvalProperties#getDefaultEvalToken()}。与 Day6 membership 头独立。
+     */
+    String resolveEvalToken(String targetId) {
+        if (targetId != null) {
+            Optional<EvalProperties.TargetConfig> opt = findTarget(targetId);
+            if (opt.isPresent()) {
+                String t = opt.get().getEvalToken();
+                if (t != null && !t.isBlank()) {
+                    return t.trim();
+                }
+            }
+        }
+        String d = evalProperties.getDefaultEvalToken();
+        return d == null ? "" : d.trim();
     }
 
     /**

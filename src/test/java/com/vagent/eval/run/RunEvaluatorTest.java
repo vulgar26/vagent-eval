@@ -59,6 +59,192 @@ class RunEvaluatorTest {
     }
 
     @Test
+    void behaviorMismatch_mapsToBehaviorMismatch_notUnknown() throws Exception {
+        RunEvaluator evaluator = new RunEvaluator(new EvalChatContractValidator(), props("", 8));
+        String json = """
+                {
+                  "answer": "x",
+                  "behavior": "clarify",
+                  "latency_ms": 1,
+                  "capabilities": {
+                    "retrieval": {"supported": false, "score": false},
+                    "tools": {"supported": true, "outcome": true}
+                  },
+                  "meta": {"mode": "EVAL"}
+                }
+                """;
+        EvalCase c = new EvalCase(
+                "s1_bm",
+                "ds",
+                "Q",
+                EvalExpectedBehavior.ANSWER,
+                false,
+                List.of(),
+                Instant.parse("2026-04-10T00:00:00Z")
+        );
+        EvalOutcome o = evaluator.evaluate(c, om.readTree(json), "vagent");
+        assertThat(o.verdict()).isEqualTo(Verdict.FAIL);
+        assertThat(o.errorCode()).isEqualTo(ErrorCode.BEHAVIOR_MISMATCH);
+        assertThat(o.debug()).containsEntry("verdict_reason", "behavior_mismatch");
+        assertThat(o.debug()).containsEntry("actual_behavior", "clarify");
+    }
+
+    @Test
+    void citations_requiresCitations_denyBoth_emptySources_emptyHits_exempt_passes() throws Exception {
+        RunEvaluator evaluator = new RunEvaluator(new EvalChatContractValidator(), props("s", 8));
+        String json = """
+                {
+                  "answer": "cannot",
+                  "behavior": "deny",
+                  "latency_ms": 1,
+                  "capabilities": {
+                    "retrieval": {"supported": true, "score": false},
+                    "tools": {"supported": false, "outcome": false}
+                  },
+                  "meta": {"mode": "EVAL"},
+                  "retrieval_hits": [],
+                  "sources": []
+                }
+                """;
+        EvalCase c = new EvalCase(
+                "s167",
+                "ds",
+                "Q",
+                EvalExpectedBehavior.DENY,
+                true,
+                List.of(),
+                Instant.parse("2026-04-10T00:00:00Z")
+        );
+        EvalOutcome o = evaluator.evaluate(c, om.readTree(json), "vagent");
+        assertThat(o.verdict()).isEqualTo(Verdict.PASS);
+        assertThat(o.errorCode()).isNull();
+        assertThat(o.debug()).containsEntry("verdict_reason", "citations_exempt_expected_deny_no_retrieval_hits");
+        assertThat(o.debug()).containsEntry("eval_rule_version", RunEvaluator.EVAL_RULE_VERSION);
+    }
+
+    @Test
+    void citations_requiresCitations_denyBoth_emptySources_hitsAbsent_metaHitCountZero_exempt() throws Exception {
+        RunEvaluator evaluator = new RunEvaluator(new EvalChatContractValidator(), props("s", 8));
+        String json = """
+                {
+                  "answer": "no",
+                  "behavior": "deny",
+                  "latency_ms": 1,
+                  "capabilities": {
+                    "retrieval": {"supported": true, "score": false},
+                    "tools": {"supported": false, "outcome": false}
+                  },
+                  "meta": {"mode": "EVAL", "retrieve_hit_count": 0}
+                }
+                """;
+        EvalCase c = new EvalCase(
+                "s167b",
+                "ds",
+                "Q",
+                EvalExpectedBehavior.DENY,
+                true,
+                List.of(),
+                Instant.parse("2026-04-10T00:00:00Z")
+        );
+        EvalOutcome o = evaluator.evaluate(c, om.readTree(json), "vagent");
+        assertThat(o.verdict()).isEqualTo(Verdict.PASS);
+        assertThat(o.debug()).containsEntry("citations_exempt", true);
+    }
+
+    @Test
+    void citations_requiresCitations_deny_emptySources_metaPositiveHitCount_notExempt() throws Exception {
+        RunEvaluator evaluator = new RunEvaluator(new EvalChatContractValidator(), props("s", 8));
+        String json = """
+                {
+                  "answer": "no",
+                  "behavior": "deny",
+                  "latency_ms": 1,
+                  "capabilities": {
+                    "retrieval": {"supported": true, "score": false},
+                    "tools": {"supported": false, "outcome": false}
+                  },
+                  "meta": {"mode": "EVAL", "retrieve_hit_count": 3}
+                }
+                """;
+        EvalCase c = new EvalCase(
+                "s167d",
+                "ds",
+                "Q",
+                EvalExpectedBehavior.DENY,
+                true,
+                List.of(),
+                Instant.parse("2026-04-10T00:00:00Z")
+        );
+        EvalOutcome o = evaluator.evaluate(c, om.readTree(json), "vagent");
+        assertThat(o.verdict()).isEqualTo(Verdict.FAIL);
+        assertThat(o.errorCode()).isEqualTo(ErrorCode.CONTRACT_VIOLATION);
+        assertThat(o.debug()).containsEntry("verdict_reason", "missing_sources");
+    }
+
+    @Test
+    void citations_requiresCitations_deny_emptySources_but_nonemptyHits_stillMissingSources() throws Exception {
+        RunEvaluator evaluator = new RunEvaluator(new EvalChatContractValidator(), props("s", 8));
+        String json = """
+                {
+                  "answer": "no",
+                  "behavior": "deny",
+                  "latency_ms": 1,
+                  "capabilities": {
+                    "retrieval": {"supported": true, "score": false},
+                    "tools": {"supported": false, "outcome": false}
+                  },
+                  "meta": {"mode": "EVAL"},
+                  "retrieval_hits": [{"id": "chunk_a", "title": "t", "snippet": "s"}],
+                  "sources": []
+                }
+                """;
+        EvalCase c = new EvalCase(
+                "s167c",
+                "ds",
+                "Q",
+                EvalExpectedBehavior.DENY,
+                true,
+                List.of(),
+                Instant.parse("2026-04-10T00:00:00Z")
+        );
+        EvalOutcome o = evaluator.evaluate(c, om.readTree(json), "vagent");
+        assertThat(o.verdict()).isEqualTo(Verdict.FAIL);
+        assertThat(o.errorCode()).isEqualTo(ErrorCode.CONTRACT_VIOLATION);
+        assertThat(o.debug()).containsEntry("verdict_reason", "missing_sources");
+    }
+
+    @Test
+    void toolExpected_toolBlockIncomplete_mapsToToolExpectationNotMet() throws Exception {
+        RunEvaluator evaluator = new RunEvaluator(new EvalChatContractValidator(), props("", 8));
+        String json = """
+                {
+                  "answer": "called",
+                  "behavior": "tool",
+                  "latency_ms": 1,
+                  "capabilities": {
+                    "retrieval": {"supported": false, "score": false},
+                    "tools": {"supported": true, "outcome": true}
+                  },
+                  "meta": {"mode": "EVAL"},
+                  "tool": {"required": true, "used": true, "succeeded": false}
+                }
+                """;
+        EvalCase c = new EvalCase(
+                "s1_tool",
+                "ds",
+                "Q",
+                EvalExpectedBehavior.TOOL,
+                false,
+                List.of(),
+                Instant.parse("2026-04-10T00:00:00Z")
+        );
+        EvalOutcome o = evaluator.evaluate(c, om.readTree(json), "vagent");
+        assertThat(o.verdict()).isEqualTo(Verdict.FAIL);
+        assertThat(o.errorCode()).isEqualTo(ErrorCode.TOOL_EXPECTATION_NOT_MET);
+        assertThat(o.debug()).containsEntry("verdict_reason", "tool_not_satisfied");
+    }
+
+    @Test
     void citations_membership_pass_canonicalCase() throws Exception {
         RunEvaluator evaluator = new RunEvaluator(new EvalChatContractValidator(), props("test-salt", 8));
         String json = """
