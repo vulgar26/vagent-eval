@@ -41,6 +41,7 @@ class EvalChatContractValidatorTest {
         assertThat(o.ok()).isFalse();
         assertThat(o.errorCode()).isEqualTo(ErrorCode.CONTRACT_VIOLATION);
         assertThat(o.reason()).contains("latency");
+        assertThat(o.violations()).contains("missing_latency_ms");
     }
 
     @Test
@@ -58,5 +59,6 @@ class EvalChatContractValidatorTest {
         assertThat(o.ok()).isFalse();
         assertThat(o.errorCode()).isEqualTo(ErrorCode.CONTRACT_VIOLATION);
         assertThat(o.reason()).contains("latency_ms");
+        assertThat(o.violations()).contains("latency_ms_must_be_number");
     }
 }

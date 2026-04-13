@@ -167,7 +167,22 @@ public class TargetClient {
             b = b.substring(0, b.length() - 1);
         }
         String path = EVAL_CHAT_PATH.startsWith("/") ? EVAL_CHAT_PATH.substring(1) : EVAL_CHAT_PATH;
-        URI base = URI.create(b);
-        return base.resolve(path);
+        try {
+            URI base = URI.create(b);
+            return base.resolve(path);
+        } catch (IllegalArgumentException e) {
+            // Avoid leaking full internal routing paths; still provide enough signal to fix config.
+            throw new IllegalArgumentException("invalid baseUrl for target: " + prefix(b, 96), e);
+        }
+    }
+
+    private static String prefix(String s, int maxChars) {
+        if (s == null) {
+            return "";
+        }
+        if (s.length() <= maxChars) {
+            return s;
+        }
+        return s.substring(0, maxChars) + "…";
     }
 }

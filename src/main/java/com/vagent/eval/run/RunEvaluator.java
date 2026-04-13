@@ -83,6 +83,9 @@ public class RunEvaluator {
         ContractOutcome co = contractValidator.validate(respJson);
         if (!co.ok()) {
             debug.put("contract_reason", co.reason());
+            if (co.violations() != null && !co.violations().isEmpty()) {
+                debug.put("contract_violations", co.violations());
+            }
             return new EvalOutcome(Verdict.FAIL, co.errorCode(), debug);
         }
 

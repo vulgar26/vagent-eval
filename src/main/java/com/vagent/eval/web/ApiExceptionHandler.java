@@ -5,6 +5,8 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.Map;
 import java.util.NoSuchElementException;
@@ -14,6 +16,8 @@ import java.util.NoSuchElementException;
  */
 @RestControllerAdvice
 public class ApiExceptionHandler {
+
+    private static final Logger log = LoggerFactory.getLogger(ApiExceptionHandler.class);
 
     @ExceptionHandler(NoSuchElementException.class)
     public ResponseEntity<Map<String, Object>> notFound(NoSuchElementException e) {
@@ -31,6 +35,8 @@ public class ApiExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String, Object>> internal(Exception e) {
+        // Log stacktrace for on-call debugging; response remains stable JSON without leaking internals.
+        log.error("Unhandled exception", e);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(Map.of("error", "INTERNAL", "message", ""));

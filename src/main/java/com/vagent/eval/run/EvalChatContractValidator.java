@@ -4,6 +4,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.vagent.eval.run.RunModel.ErrorCode;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
 /**
  * Day4：{@code POST /api/v1/eval/chat} 响应契约校验（SSOT：p0-execution-map 附录 C2/C3）。
  * <p>
@@ -18,13 +22,15 @@ import org.springframework.stereotype.Component;
 @Component
 public class EvalChatContractValidator {
 
-    public record ContractOutcome(boolean ok, ErrorCode errorCode, String reason) {
+    public record ContractOutcome(boolean ok, ErrorCode errorCode, String reason, List<String> violations) {
         public static ContractOutcome pass() {
-            return new ContractOutcome(true, null, "");
+            return new ContractOutcome(true, null, "", List.of());
         }
 
-        public static ContractOutcome fail(ErrorCode code, String reason) {
-            return new ContractOutcome(false, code, reason == null ? "" : reason);
+        public static ContractOutcome fail(ErrorCode code, List<String> violations) {
+            String reason = (violations == null || violations.isEmpty()) ? "" : String.valueOf(violations.getFirst());
+            List<String> v = violations == null ? List.of() : Collections.unmodifiableList(new ArrayList<>(violations));
+            return new ContractOutcome(false, code, reason, v);
         }
     }
 
@@ -40,59 +46,65 @@ public class EvalChatContractValidator {
      */
     public ContractOutcome validate(JsonNode root) {
         if (root == null || root.isNull()) {
-            return ContractOutcome.fail(ErrorCode.CONTRACT_VIOLATION, "root_is_null");
+            return ContractOutcome.fail(ErrorCode.CONTRACT_VIOLATION, List.of("root_is_null"));
         }
         if (!root.isObject()) {
-            return ContractOutcome.fail(ErrorCode.CONTRACT_VIOLATION, "root_must_be_object");
+            return ContractOutcome.fail(ErrorCode.CONTRACT_VIOLATION, List.of("root_must_be_object"));
         }
+
+        List<String> violations = new ArrayList<>();
 
         JsonNode answer = root.get("answer");
         if (answer == null || answer.isNull()) {
-            return ContractOutcome.fail(ErrorCode.CONTRACT_VIOLATION, "missing_answer");
+            violations.add("missing_answer");
         }
-        if (!answer.isTextual()) {
-            return ContractOutcome.fail(ErrorCode.CONTRACT_VIOLATION, "answer_must_be_string");
+        if (answer != null && !answer.isNull() && !answer.isTextual()) {
+            violations.add("answer_must_be_string");
         }
 
         JsonNode behavior = root.get("behavior");
         if (behavior == null || behavior.isNull()) {
-            return ContractOutcome.fail(ErrorCode.CONTRACT_VIOLATION, "missing_behavior");
+            violations.add("missing_behavior");
         }
-        if (!behavior.isTextual()) {
-            return ContractOutcome.fail(ErrorCode.CONTRACT_VIOLATION, "behavior_must_be_string");
+        if (behavior != null && !behavior.isNull() && !behavior.isTextual()) {
+            violations.add("behavior_must_be_string");
         }
 
         JsonNode latency = root.get("latency_ms");
         if (latency == null || latency.isNull()) {
-            return ContractOutcome.fail(ErrorCode.CONTRACT_VIOLATION, "missing_latency_ms");
+            violations.add("missing_latency_ms");
         }
-        if (!latency.isNumber()) {
-            return ContractOutcome.fail(ErrorCode.CONTRACT_VIOLATION, "latency_ms_must_be_number");
+        if (latency != null && !latency.isNull() && !latency.isNumber()) {
+            violations.add("latency_ms_must_be_number");
         }
 
         JsonNode caps = root.get("capabilities");
         if (caps == null || caps.isNull()) {
-            return ContractOutcome.fail(ErrorCode.CONTRACT_VIOLATION, "missing_capabilities");
+            violations.add("missing_capabilities");
         }
-        if (!caps.isObject()) {
-            return ContractOutcome.fail(ErrorCode.CONTRACT_VIOLATION, "capabilities_must_be_object");
+        if (caps != null && !caps.isNull() && !caps.isObject()) {
+            violations.add("capabilities_must_be_object");
         }
 
         JsonNode meta = root.get("meta");
         if (meta == null || meta.isNull()) {
-            return ContractOutcome.fail(ErrorCode.CONTRACT_VIOLATION, "missing_meta");
+            violations.add("missing_meta");
         }
-        if (!meta.isObject()) {
-            return ContractOutcome.fail(ErrorCode.CONTRACT_VIOLATION, "meta_must_be_object");
+        if (meta != null && !meta.isNull() && !meta.isObject()) {
+            violations.add("meta_must_be_object");
         }
-        JsonNode mode = meta.get("mode");
-        if (mode == null || mode.isNull()) {
-            return ContractOutcome.fail(ErrorCode.CONTRACT_VIOLATION, "meta_missing_mode");
-        }
-        if (!mode.isTextual()) {
-            return ContractOutcome.fail(ErrorCode.CONTRACT_VIOLATION, "meta_mode_must_be_string");
+        if (meta != null && meta.isObject()) {
+            JsonNode mode = meta.get("mode");
+            if (mode == null || mode.isNull()) {
+                violations.add("meta_missing_mode");
+            } else if (!mode.isTextual()) {
+                violations.add("meta_mode_must_be_string");
+            }
         }
 
+        if (!violations.isEmpty()) {
+            return ContractOutcome.fail(ErrorCode.CONTRACT_VIOLATION, violations);
+        }
         return ContractOutcome.pass();
     }
 }

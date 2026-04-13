@@ -7,6 +7,8 @@ import com.vagent.eval.run.RunModel.EvalResult;
 import com.vagent.eval.run.RunModel.EvalRun;
 import com.vagent.eval.run.RunModel.ErrorCode;
 import com.vagent.eval.run.RunModel.Verdict;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
@@ -26,6 +28,8 @@ import java.util.NoSuchElementException;
  */
 @Component
 public class RunRunner {
+
+    private static final Logger log = LoggerFactory.getLogger(RunRunner.class);
 
     /**
      * P0：为了让“取消 run”在本地可稳定复现，串行跑每条 case 之间默认 sleep 一小段时间。
@@ -63,7 +67,7 @@ public class RunRunner {
             // 取 target 配置
             EvalProperties.TargetConfig tc = targetClient.findTarget(run.targetId())
                     .filter(EvalProperties.TargetConfig::isEnabled)
-                    .orElseThrow(() -> new IllegalArgumentException("target not found or disabled"));
+                    .orElseThrow(() -> new IllegalArgumentException("target not found or disabled: target_id=" + run.targetId()));
 
             List<EvalCase> cases = datasetStore.listAllCases(run.datasetId());
             for (EvalCase c : cases) {
@@ -92,8 +96,24 @@ public class RunRunner {
             runStore.markFinished(runId);
         } catch (Exception e) {
             // P0：避免线程异常导致 run 永远停在 RUNNING（无法验收/无法排障）
-            runStore.markCancelled(runId, "runner_error:" + e.getClass().getSimpleName());
+            log.error("RunRunner crashed: runId={}", runId, e);
+            String msg = e.getMessage();
+            String reason = "runner_error:" + e.getClass().getSimpleName();
+            if (msg != null && !msg.isBlank()) {
+                reason += ":" + truncate(msg.trim(), 200);
+            }
+            runStore.markCancelled(runId, reason);
         }
+    }
+
+    private static String truncate(String s, int max) {
+        if (s == null) {
+            return "";
+        }
+        if (s.length() <= max) {
+            return s;
+        }
+        return s.substring(0, max) + "…";
     }
 
     /**
