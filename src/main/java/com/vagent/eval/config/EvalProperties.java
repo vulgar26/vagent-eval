@@ -57,6 +57,18 @@ public class EvalProperties {
     private Membership membership = new Membership();
 
     /**
+     * P0+：执行器/保护性参数（限流、并发等）。默认值应“能跑通”但不打爆下游。
+     */
+    @Valid
+    private Runner runner = new Runner();
+
+    /**
+     * P1：内存版/存储版统一的保留期配置（默认关闭自动清理；生产可开启）。
+     */
+    @Valid
+    private Retention retention = new Retention();
+
+    /**
      * P0+：调用被测 {@code POST /api/v1/eval/chat} 时写入 {@code X-Eval-Token} 的默认明文；
      * per-target 见 {@link TargetConfig#getEvalToken()}。明文勿提交仓库，用环境变量或本地覆盖文件注入。
      */
@@ -84,6 +96,22 @@ public class EvalProperties {
 
     public void setMembership(Membership membership) {
         this.membership = membership == null ? new Membership() : membership;
+    }
+
+    public Runner getRunner() {
+        return runner;
+    }
+
+    public void setRunner(Runner runner) {
+        this.runner = runner == null ? new Runner() : runner;
+    }
+
+    public Retention getRetention() {
+        return retention;
+    }
+
+    public void setRetention(Retention retention) {
+        this.retention = retention == null ? new Retention() : retention;
     }
 
     public String getDefaultEvalToken() {
@@ -225,6 +253,100 @@ public class EvalProperties {
 
         public void setTopN(int topN) {
             this.topN = topN;
+        }
+    }
+
+    public static class Runner {
+
+        /**
+         * eval 侧对下游 target 的全局并发保护（跨 run 生效）。P0 默认偏保守。
+         */
+        @Min(1)
+        @Max(256)
+        private int maxConcurrency = 8;
+
+        /**
+         * 获取并发许可的等待时间；超时则本次 case 直接返回 {@code RATE_LIMITED}（避免堆积导致雪崩）。
+         */
+        @Min(0)
+        @Max(60_000)
+        private int acquireTimeoutMs = 250;
+
+        /**
+         * 写入下游 eval/chat JSON body 的 {@code mode}（默认 {@code EVAL}）。
+         * <p>
+         * 仅用于联调/排障：可配置为 {@code EVAL_DEBUG} 以允许下游返回更强的 debug 字段（仍需下游自行遵守安全策略）。
+         */
+        private String chatMode = "EVAL";
+
+        public int getMaxConcurrency() {
+            return maxConcurrency;
+        }
+
+        public void setMaxConcurrency(int maxConcurrency) {
+            this.maxConcurrency = maxConcurrency;
+        }
+
+        public int getAcquireTimeoutMs() {
+            return acquireTimeoutMs;
+        }
+
+        public void setAcquireTimeoutMs(int acquireTimeoutMs) {
+            this.acquireTimeoutMs = acquireTimeoutMs;
+        }
+
+        public String getChatMode() {
+            return chatMode;
+        }
+
+        public void setChatMode(String chatMode) {
+            this.chatMode = chatMode == null ? "EVAL" : chatMode.trim();
+        }
+    }
+
+    public static class Retention {
+
+        /**
+         * 是否启用自动清理（默认 false：避免本地开发误删证据）。
+         */
+        private boolean enabled = false;
+
+        /**
+         * 仅清理已 FINISHED/CANCELLED 的 run；保留天数从 finishedAt 计算。
+         */
+        @Min(1)
+        @Max(365)
+        private int days = 14;
+
+        /**
+         * 清理执行间隔（毫秒）：默认 24h。
+         */
+        @Min(10_000)
+        @Max(7 * 24 * 60 * 60 * 1000)
+        private long intervalMs = 24L * 60L * 60L * 1000L;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public int getDays() {
+            return days;
+        }
+
+        public void setDays(int days) {
+            this.days = days;
+        }
+
+        public long getIntervalMs() {
+            return intervalMs;
+        }
+
+        public void setIntervalMs(long intervalMs) {
+            this.intervalMs = intervalMs;
         }
     }
 }

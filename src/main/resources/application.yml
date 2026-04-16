@@ -1,5 +1,9 @@
 server:
   port: 8099
+  # 阶段三：关闭默认 whitelabel（避免 HTML 错误页），统一走 /error JSON
+  error:
+    whitelabel:
+      enabled: false
 
 spring:
   application:
@@ -39,8 +43,19 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info
+        # 阶段二：暴露 Prometheus scrape 端点（拉取文本指标）
+        include: health,info,prometheus
   endpoint:
     health:
       probes:
         enabled: true
+  metrics:
+    tags:
+      # 便于 Grafana/PromQL 按应用维度过滤（多服务同集群时常用）
+      application: ${spring.application.name}
+
+# 阶段二：业务执行日志（RunRunner）—— key=value 便于 grep；默认 INFO 即可看到 run 起止与逐题摘要
+logging:
+  level:
+    com.vagent.eval.run.RunRunner: INFO
+

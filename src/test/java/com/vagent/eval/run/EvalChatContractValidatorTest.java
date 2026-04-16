@@ -61,4 +61,35 @@ class EvalChatContractValidatorTest {
         assertThat(o.reason()).contains("latency_ms");
         assertThat(o.violations()).contains("latency_ms_must_be_number");
     }
+
+    @Test
+    void emptyRetrievalHitIdHashesArray_passesContract() throws Exception {
+        String json = """
+                {
+                  "answer": "x",
+                  "behavior": "clarify",
+                  "latency_ms": 1,
+                  "capabilities": {"retrieval": {"supported": true, "score": false}},
+                  "meta": {"mode": "EVAL", "retrieval_hit_id_hashes": []}
+                }
+                """;
+        ContractOutcome o = validator.validate(om.readTree(json));
+        assertThat(o.ok()).isTrue();
+    }
+
+    @Test
+    void nonEmptyRetrievalHitIdHashes_invalidHex_contractViolation() throws Exception {
+        String json = """
+                {
+                  "answer": "x",
+                  "behavior": "answer",
+                  "latency_ms": 1,
+                  "capabilities": {"retrieval": {"supported": true, "score": false}},
+                  "meta": {"mode": "EVAL", "retrieval_hit_id_hashes": ["not-64-hex"]}
+                }
+                """;
+        ContractOutcome o = validator.validate(om.readTree(json));
+        assertThat(o.ok()).isFalse();
+        assertThat(o.violations()).contains("meta_retrieval_hit_id_hashes_must_be_sha256_hex64");
+    }
 }

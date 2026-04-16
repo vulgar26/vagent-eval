@@ -2,6 +2,7 @@ package com.vagent.eval;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * P0 eval 服务入口：后续在此进程中扩展 dataset / run / report / compare。
@@ -18,6 +19,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
  * 创建 Spring 容器、完成自动配置与 Bean 装配、启动内嵌 Web 服务器（本项目的端口见 {@code application.yml} 的 {@code server.port}），然后进程常驻。
  */
 @SpringBootApplication
+@EnableScheduling
 public class VagentEvalApplication {
 
     public static void main(String[] args) {

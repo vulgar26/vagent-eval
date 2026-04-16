@@ -10,7 +10,9 @@ import org.springframework.stereotype.Component;
 
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -25,8 +27,8 @@ import java.util.Set;
  *   <li>{@code expected_behavior} 与 {@code behavior} 文本一致；</li>
  *   <li>{@code requires_citations}：检索不支持则跳过；否则一般要求非空 {@code sources}；
  *       <strong>P0+ §16.7</strong>：期望与实际均为 {@code deny} 且检索 0 命中信号时允许空 {@code sources}；</li>
- *   <li><strong>Day6</strong>：在 citations 路径上要求 {@code retrieval_hits}，对其前 N 条做 hashed membership，
- *       保证每条 source 的 id 落在候选集内，否则 {@link ErrorCode#SOURCE_NOT_IN_HITS}；</li>
+ *   <li><strong>P0+</strong>：在 citations（answer）路径上优先使用 {@code meta.retrieval_hit_id_hashes}（前 N 条）做 HMAC membership；
+ *       在 {@code meta.mode=EVAL_DEBUG} 且缺 hashes 时，允许回退到 {@code meta.retrieval_hit_ids[]} 明文候选集做包含判定（见 eval-upgrade.md）。</li>
  *   <li>最后处理 {@code expected_behavior=tool} 且工具已声明支持时的 {@code tool} 块细节。</li>
  * </ol>
  * <p>
@@ -87,6 +89,19 @@ public class RunEvaluator {
             return new EvalOutcome(Verdict.FAIL, co.errorCode(), debug);
         }
 
+        // P0+：EVAL_DEBUG 安全边界（与 eval-upgrade.md 对齐）。
+        // 约定：只有 meta.mode=EVAL_DEBUG 时允许返回明文候选集（如 meta.retrieval_hit_ids）。
+        JsonNode meta = respJson.get("meta");
+        String mode = meta == null ? "" : asText(meta.get("mode"));
+        if (!"EVAL_DEBUG".equalsIgnoreCase(mode)) {
+            JsonNode hitIds = meta == null ? null : meta.get("retrieval_hit_ids");
+            if (hitIds != null && hitIds.isArray() && hitIds.size() > 0) {
+                debug.put("verdict_reason", "security_boundary_violation");
+                debug.put("security_violation_key", "meta.retrieval_hit_ids");
+                return new EvalOutcome(Verdict.FAIL, ErrorCode.SECURITY_BOUNDARY_VIOLATION, debug);
+            }
+        }
+
         String behavior = asText(respJson.get("behavior"));
         debug.put("actual_behavior", behavior);
 
@@ -129,8 +144,8 @@ public class RunEvaluator {
                     debug.put("verdict_reason", "missing_sources");
                     return new EvalOutcome(Verdict.FAIL, ErrorCode.CONTRACT_VIOLATION, debug);
             } else {
-                // Day6：引用必须落在检索候选（前 N 条 hits）的 hashed 集合内。
-                EvalOutcome membershipOutcome = verifyCitationMembership(respJson, sources, targetId, debug);
+                // P0+：引用必须落在检索候选（前 N 条）的 hashed 集合内（基于 X-Eval-Token 派生 per-case key）。
+                EvalOutcome membershipOutcome = verifyCitationMembership(respJson, sources, targetId, c.datasetId(), c.caseId(), debug);
                 if (membershipOutcome != null) {
                     return membershipOutcome;
                 }
@@ -161,7 +176,7 @@ public class RunEvaluator {
     }
 
     /**
-     * Day6：校验 {@code sources[*].id} 是否均属于 {@code retrieval_hits} 前 N 条所构成的 hashed 候选集。
+     * P0+：校验 {@code sources[*].id} 是否均属于被测返回的 {@code meta.retrieval_hit_id_hashes[]} 所构成的 hashed 候选集。
      * <p>
      * 若本方法返回非 null，调用方应<strong>直接返回</strong>该 outcome（失败或契约问题）；
      * 返回 null 表示 membership 通过，调用方继续后续 tool 等规则。
@@ -169,67 +184,206 @@ public class RunEvaluator {
      * @param respJson 合法契约下的完整响应根节点
      * @param sources  已确认为数组且 size≥1
      * @param targetId 当前 target，与哈希绑定
+     * @param datasetId 当前 case 所属 dataset（参与 key 派生）
+     * @param caseId 当前 caseId（参与 key 派生）
      * @param debug    同源 debug Map，本方法会追加 membership 相关键
      * @return null 表示通过；非 null 为终态
      */
-    private EvalOutcome verifyCitationMembership(JsonNode respJson, JsonNode sources, String targetId, Map<String, Object> debug) {
-        String salt = evalProperties.getMembership().getSalt();
+    private EvalOutcome verifyCitationMembership(
+            JsonNode respJson,
+            JsonNode sources,
+            String targetId,
+            String datasetId,
+            String caseId,
+            Map<String, Object> debug
+    ) {
+        String token = resolveEvalToken(targetId);
         int topN = evalProperties.getMembership().getTopN();
         debug.put("membership_top_n", topN);
-        debug.put("membership_salt_configured", salt != null && !salt.isEmpty());
+        debug.put("membership_eval_token_configured", token != null && !token.isEmpty());
+        debug.put("membership_hash_alg", "HMAC-SHA256");
+        debug.put("membership_key_derivation", "x-eval-token/v1");
+        debug.put("membership_key_derivation_prefix", CitationMembership.HITID_KEY_DERIVATION_PREFIX_V1);
 
-        JsonNode hitsNode = respJson.get("retrieval_hits");
-        if (hitsNode == null || hitsNode.isNull() || !hitsNode.isArray() || hitsNode.size() < 1) {
-            debug.put("verdict_reason", "missing_retrieval_hits");
+        JsonNode meta = respJson == null ? null : respJson.get("meta");
+        String mode = meta == null ? "" : asText(meta.get("mode"));
+        boolean evalDebug = "EVAL_DEBUG".equalsIgnoreCase(mode);
+
+        JsonNode hashesNode = meta == null ? null : meta.get("retrieval_hit_id_hashes");
+        boolean hasHashes = hashesNode != null && hashesNode.isArray() && hashesNode.size() > 0;
+
+        if (hasHashes) {
+            debug.put("membership_path", "hashes_v1");
+
+            int considered = Math.min(topN, hashesNode.size());
+            debug.put("membership_hashes_considered", considered);
+
+            byte[] caseKey = CitationMembership.deriveCaseKeyV1(token, targetId, datasetId, caseId);
+
+            Set<String> allowedHashes = new HashSet<>();
+            for (int i = 0; i < considered; i++) {
+                JsonNode h = hashesNode.get(i);
+                if (h == null || !h.isTextual()) {
+                    debug.put("verdict_reason", "retrieval_hit_id_hash_not_string");
+                    debug.put("retrieval_hit_id_hash_index", i);
+                    return new EvalOutcome(Verdict.FAIL, ErrorCode.CONTRACT_VIOLATION, debug);
+                }
+                String s = h.asText().trim().toLowerCase(Locale.ROOT);
+                if (s.isEmpty()) {
+                    debug.put("verdict_reason", "retrieval_hit_id_hash_empty");
+                    debug.put("retrieval_hit_id_hash_index", i);
+                    return new EvalOutcome(Verdict.FAIL, ErrorCode.CONTRACT_VIOLATION, debug);
+                }
+                allowedHashes.add(s);
+            }
+
+            for (int i = 0; i < sources.size(); i++) {
+                JsonNode src = sources.get(i);
+                if (src == null || !src.isObject()) {
+                    debug.put("verdict_reason", "source_not_object");
+                    debug.put("source_index", i);
+                    return new EvalOutcome(Verdict.FAIL, ErrorCode.CONTRACT_VIOLATION, debug);
+                }
+                JsonNode sid = src.get("id");
+                if (sid == null || !sid.isTextual()) {
+                    debug.put("verdict_reason", "citation_source_id_invalid");
+                    debug.put("source_index", i);
+                    return new EvalOutcome(Verdict.FAIL, ErrorCode.CONTRACT_VIOLATION, debug);
+                }
+                String rawId = sid.asText();
+                String canonical = CitationMembership.canonicalChunkId(rawId);
+                String h = CitationMembership.hitIdHashHexV1(caseKey, canonical).toLowerCase(Locale.ROOT);
+                if (!allowedHashes.contains(h)) {
+                    debug.put("verdict_reason", "source_not_in_hits");
+                    debug.put("rejected_source_index", i);
+                    debug.put("rejected_source_id_prefix", prefix(rawId, 48));
+                    debug.put("rejected_membership_hash_prefix", h.length() >= 12 ? h.substring(0, 12) : h);
+                    return new EvalOutcome(Verdict.FAIL, ErrorCode.SOURCE_NOT_IN_HITS, debug);
+                }
+            }
+
+            debug.put("membership_ok", true);
+            return null;
+        }
+
+        // EVAL_DEBUG：允许明文候选 id 列表（与 eval-upgrade.md 对齐）；仅在缺 hashes 时启用。
+        if (!evalDebug) {
+            debug.put("verdict_reason", "missing_retrieval_hit_id_hashes");
             return new EvalOutcome(Verdict.FAIL, ErrorCode.CONTRACT_VIOLATION, debug);
         }
 
-        int considered = Math.min(topN, hitsNode.size());
-        debug.put("membership_hits_considered", considered);
+        JsonNode hitIds = meta == null ? null : meta.get("retrieval_hit_ids");
+        if (hitIds != null && hitIds.isArray() && hitIds.size() > 0) {
+            debug.put("membership_path", "debug_plain_hit_ids");
 
-        Set<String> allowedHashes = new HashSet<>();
-        for (int i = 0; i < considered; i++) {
-            JsonNode hit = hitsNode.get(i);
-            if (hit == null || !hit.isObject()) {
-                debug.put("verdict_reason", "retrieval_hit_not_object");
-                return new EvalOutcome(Verdict.FAIL, ErrorCode.CONTRACT_VIOLATION, debug);
+            int considered = Math.min(topN, hitIds.size());
+            debug.put("membership_plain_hit_ids_considered", considered);
+
+            Set<String> allowedCanonical = new HashSet<>();
+            for (int i = 0; i < considered; i++) {
+                JsonNode idNode = hitIds.get(i);
+                if (idNode == null || !idNode.isTextual()) {
+                    debug.put("verdict_reason", "retrieval_hit_id_not_string");
+                    debug.put("retrieval_hit_id_index", i);
+                    return new EvalOutcome(Verdict.FAIL, ErrorCode.CONTRACT_VIOLATION, debug);
+                }
+                allowedCanonical.add(CitationMembership.canonicalChunkId(idNode.asText()));
             }
-            JsonNode idNode = hit.get("id");
-            if (idNode == null || !idNode.isTextual()) {
-                debug.put("verdict_reason", "retrieval_hit_missing_id");
-                return new EvalOutcome(Verdict.FAIL, ErrorCode.CONTRACT_VIOLATION, debug);
+
+            for (int i = 0; i < sources.size(); i++) {
+                JsonNode src = sources.get(i);
+                if (src == null || !src.isObject()) {
+                    debug.put("verdict_reason", "source_not_object");
+                    debug.put("source_index", i);
+                    return new EvalOutcome(Verdict.FAIL, ErrorCode.CONTRACT_VIOLATION, debug);
+                }
+                JsonNode sid = src.get("id");
+                if (sid == null || !sid.isTextual()) {
+                    debug.put("verdict_reason", "citation_source_id_invalid");
+                    debug.put("source_index", i);
+                    return new EvalOutcome(Verdict.FAIL, ErrorCode.CONTRACT_VIOLATION, debug);
+                }
+                String rawId = sid.asText();
+                String canonical = CitationMembership.canonicalChunkId(rawId);
+                if (!allowedCanonical.contains(canonical)) {
+                    debug.put("verdict_reason", "source_not_in_hits");
+                    debug.put("rejected_source_index", i);
+                    debug.put("rejected_source_id_prefix", prefix(rawId, 48));
+                    return new EvalOutcome(Verdict.FAIL, ErrorCode.SOURCE_NOT_IN_HITS, debug);
+                }
             }
-            String canonical = CitationMembership.canonicalChunkId(idNode.asText());
-            allowedHashes.add(CitationMembership.membershipHashHex(salt, targetId, canonical));
+
+            debug.put("membership_ok", true);
+            return null;
         }
 
-        for (int i = 0; i < sources.size(); i++) {
-            JsonNode src = sources.get(i);
-            if (src == null || !src.isObject()) {
-                debug.put("verdict_reason", "source_not_object");
-                debug.put("source_index", i);
-                return new EvalOutcome(Verdict.FAIL, ErrorCode.CONTRACT_VIOLATION, debug);
+        JsonNode hitsNode = respJson.get("retrieval_hits");
+        if (hitsNode != null && hitsNode.isArray() && hitsNode.size() > 0) {
+            debug.put("membership_path", "debug_retrieval_hits");
+
+            int considered = Math.min(topN, hitsNode.size());
+            debug.put("membership_hits_considered", considered);
+
+            Set<String> allowedCanonical = new HashSet<>();
+            for (int i = 0; i < considered; i++) {
+                JsonNode hit = hitsNode.get(i);
+                if (hit == null || !hit.isObject()) {
+                    debug.put("verdict_reason", "retrieval_hit_not_object");
+                    return new EvalOutcome(Verdict.FAIL, ErrorCode.CONTRACT_VIOLATION, debug);
+                }
+                JsonNode idNode = hit.get("id");
+                if (idNode == null || !idNode.isTextual()) {
+                    debug.put("verdict_reason", "retrieval_hit_missing_id");
+                    return new EvalOutcome(Verdict.FAIL, ErrorCode.CONTRACT_VIOLATION, debug);
+                }
+                allowedCanonical.add(CitationMembership.canonicalChunkId(idNode.asText()));
             }
-            JsonNode sid = src.get("id");
-            if (sid == null || !sid.isTextual()) {
-                debug.put("verdict_reason", "citation_source_id_invalid");
-                debug.put("source_index", i);
-                return new EvalOutcome(Verdict.FAIL, ErrorCode.CONTRACT_VIOLATION, debug);
+
+            for (int i = 0; i < sources.size(); i++) {
+                JsonNode src = sources.get(i);
+                if (src == null || !src.isObject()) {
+                    debug.put("verdict_reason", "source_not_object");
+                    debug.put("source_index", i);
+                    return new EvalOutcome(Verdict.FAIL, ErrorCode.CONTRACT_VIOLATION, debug);
+                }
+                JsonNode sid = src.get("id");
+                if (sid == null || !sid.isTextual()) {
+                    debug.put("verdict_reason", "citation_source_id_invalid");
+                    debug.put("source_index", i);
+                    return new EvalOutcome(Verdict.FAIL, ErrorCode.CONTRACT_VIOLATION, debug);
+                }
+                String rawId = sid.asText();
+                String canonical = CitationMembership.canonicalChunkId(rawId);
+                if (!allowedCanonical.contains(canonical)) {
+                    debug.put("verdict_reason", "source_not_in_hits");
+                    debug.put("rejected_source_index", i);
+                    debug.put("rejected_source_id_prefix", prefix(rawId, 48));
+                    return new EvalOutcome(Verdict.FAIL, ErrorCode.SOURCE_NOT_IN_HITS, debug);
+                }
             }
-            String rawId = sid.asText();
-            String canonical = CitationMembership.canonicalChunkId(rawId);
-            String h = CitationMembership.membershipHashHex(salt, targetId, canonical);
-            if (!allowedHashes.contains(h)) {
-                debug.put("verdict_reason", "source_not_in_hits");
-                debug.put("rejected_source_index", i);
-                debug.put("rejected_source_id_prefix", prefix(rawId, 48));
-                debug.put("rejected_membership_hash_prefix", h.length() >= 12 ? h.substring(0, 12) : h);
-                return new EvalOutcome(Verdict.FAIL, ErrorCode.SOURCE_NOT_IN_HITS, debug);
-            }
+
+            debug.put("membership_ok", true);
+            return null;
         }
 
-        debug.put("membership_ok", true);
-        return null;
+        debug.put("verdict_reason", "missing_membership_evidence");
+        return new EvalOutcome(Verdict.FAIL, ErrorCode.CONTRACT_VIOLATION, debug);
+    }
+
+    private String resolveEvalToken(String targetId) {
+        if (targetId != null) {
+            Optional<EvalProperties.TargetConfig> opt = evalProperties.getTargets().stream()
+                    .filter(t -> t.getTargetId() != null && t.getTargetId().trim().equalsIgnoreCase(targetId.trim()))
+                    .findFirst();
+            if (opt.isPresent()) {
+                String t = opt.get().getEvalToken();
+                if (t != null && !t.isBlank()) {
+                    return t.trim();
+                }
+            }
+        }
+        String d = evalProperties.getDefaultEvalToken();
+        return d == null ? "" : d.trim();
     }
 
     /**

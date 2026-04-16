@@ -11,7 +11,9 @@ import org.springframework.http.server.ServletServerHttpRequest;
 import org.springframework.web.bind.annotation.ControllerAdvice;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyAdvice;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -56,7 +58,9 @@ public class EvalDebugResponseBodyAdvice implements ResponseBodyAdvice<Object> {
             return body;
         }
         String debugHdr = req.getHeader(EvalSecurityConstants.HDR_EVAL_DEBUG);
-        if (EvalDebugExposureChecker.violates(body, debugHdr)) {
+        // 阶段三：出站先清洗（更严格），再做“是否违反边界”的阻断判断。
+        Object sanitized = sanitizeOutbound(body, debugHdr);
+        if (EvalDebugExposureChecker.violates(sanitized, debugHdr)) {
             response.setStatusCode(HttpStatus.FORBIDDEN);
             auditLogger.record(
                     AuditReason.EVAL_DEBUG_REQUIRED,
@@ -71,6 +75,59 @@ public class EvalDebugResponseBodyAdvice implements ResponseBodyAdvice<Object> {
             err.put("message", "debug contains fields that require " + EvalSecurityConstants.HDR_EVAL_DEBUG + " header");
             return err;
         }
-        return body;
+        return sanitized;
+    }
+
+    /**
+     * 仅对“包含 EvalResult 列表的响应”做清洗：
+     * <ul>
+     *   <li>RunApi.results：Map{results:[EvalResult...]}</li>
+     * </ul>
+     * 其它响应保持不变，避免误伤报表/compare 的结构。
+     */
+    private static Object sanitizeOutbound(Object body, String evalDebugHeaderRaw) {
+        if (!(body instanceof Map<?, ?> map)) {
+            return body;
+        }
+        Object results = map.get("results");
+        if (!(results instanceof List<?> list)) {
+            return body;
+        }
+        boolean allowed = EvalDebugExposureChecker.evalDebugAllowed(evalDebugHeaderRaw);
+        List<Object> out = new ArrayList<>(list.size());
+        boolean changed = false;
+        for (Object o : list) {
+            if (o instanceof com.vagent.eval.run.RunModel.EvalResult er) {
+                Map<String, Object> safe = DebugSanitizer.sanitizeForOutbound(er.debug(), allowed);
+                if (safe != er.debug()) {
+                    changed = true;
+                }
+                out.add(new com.vagent.eval.run.RunModel.EvalResult(
+                        er.runId(),
+                        er.datasetId(),
+                        er.targetId(),
+                        er.caseId(),
+                        er.verdict(),
+                        er.errorCode(),
+                        er.latencyMs(),
+                        er.createdAt(),
+                        safe
+                ));
+            } else {
+                out.add(o);
+            }
+        }
+        if (!changed) {
+            return body;
+        }
+        // 复制一份 Map（保持原 key/value），只替换 results
+        Map<String, Object> m2 = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> e : map.entrySet()) {
+            if (e.getKey() != null) {
+                m2.put(String.valueOf(e.getKey()), e.getValue());
+            }
+        }
+        m2.put("results", out);
+        return m2;
     }
 }

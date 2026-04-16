@@ -3,6 +3,7 @@ package com.vagent.eval.run;
 import com.vagent.eval.config.EvalProperties;
 import com.vagent.eval.dataset.DatasetStore;
 import com.vagent.eval.dataset.Model.EvalCase;
+import com.vagent.eval.observability.EvalMetrics;
 import com.vagent.eval.run.RunModel.EvalResult;
 import com.vagent.eval.run.RunModel.EvalRun;
 import com.vagent.eval.run.RunModel.ErrorCode;
@@ -16,6 +17,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Day3/Day6：串行执行器。
@@ -45,12 +48,26 @@ public class RunRunner {
     private final RunStore runStore;
     private final TargetClient targetClient;
     private final RunEvaluator evaluator;
+    private final EvalProperties evalProperties;
+    private final EvalMetrics evalMetrics;
+    private final Semaphore permits;
 
-    public RunRunner(DatasetStore datasetStore, RunStore runStore, TargetClient targetClient, RunEvaluator evaluator) {
+    public RunRunner(
+            DatasetStore datasetStore,
+            RunStore runStore,
+            TargetClient targetClient,
+            RunEvaluator evaluator,
+            EvalProperties evalProperties,
+            EvalMetrics evalMetrics
+    ) {
         this.datasetStore = datasetStore;
         this.runStore = runStore;
         this.targetClient = targetClient;
         this.evaluator = evaluator;
+        this.evalProperties = evalProperties;
+        this.evalMetrics = evalMetrics;
+        int max = evalProperties == null ? 8 : evalProperties.getRunner().getMaxConcurrency();
+        this.permits = new Semaphore(Math.max(1, max), true);
     }
 
     public void startAsync(String runId) {
@@ -64,6 +81,15 @@ public class RunRunner {
         try {
             EvalRun run = runStore.getRun(runId).orElseThrow(() -> new NoSuchElementException("run not found"));
 
+            // 阶段二：结构化日志（key=value），便于 grep/采集；不打印题干/答案全文
+            log.info(
+                    "eval_event=run_started run_id={} dataset_id={} target_id={} total_cases={}",
+                    runId,
+                    run.datasetId(),
+                    run.targetId(),
+                    run.totalCases()
+            );
+
             // 取 target 配置
             EvalProperties.TargetConfig tc = targetClient.findTarget(run.targetId())
                     .filter(EvalProperties.TargetConfig::isEnabled)
@@ -73,11 +99,29 @@ public class RunRunner {
             for (EvalCase c : cases) {
                 if (runStore.isCancelRequested(runId)) {
                     runStore.markCancelled(runId, runStore.getRun(runId).map(EvalRun::cancelReason).orElse(""));
+                    evalMetrics.runTerminal(run.targetId(), "CANCELLED");
+                    log.info(
+                            "eval_event=run_terminal run_id={} dataset_id={} target_id={} status=CANCELLED reason=user_cancel",
+                            runId,
+                            run.datasetId(),
+                            run.targetId()
+                    );
                     return;
                 }
 
                 EvalResult r = runOneCase(run, tc.getBaseUrl(), c);
                 runStore.appendResult(r);
+                evalMetrics.caseResult(run.targetId(), r.verdict(), r.errorCode());
+                log.info(
+                        "eval_event=case_finished run_id={} dataset_id={} target_id={} case_id={} verdict={} error_code={} latency_ms={}",
+                        runId,
+                        run.datasetId(),
+                        run.targetId(),
+                        c.caseId(),
+                        r.verdict(),
+                        r.errorCode() == null ? "NONE" : r.errorCode().name(),
+                        r.latencyMs()
+                );
 
                 // 给 cancel 一个稳定的可观测窗口（见 INTER_CASE_SLEEP_MS 注释）
                 if (INTER_CASE_SLEEP_MS > 0) {
@@ -91,9 +135,23 @@ public class RunRunner {
 
             if (runStore.isCancelRequested(runId)) {
                 runStore.markCancelled(runId, runStore.getRun(runId).map(EvalRun::cancelReason).orElse(""));
+                evalMetrics.runTerminal(run.targetId(), "CANCELLED");
+                log.info(
+                        "eval_event=run_terminal run_id={} dataset_id={} target_id={} status=CANCELLED reason=user_cancel_end",
+                        runId,
+                        run.datasetId(),
+                        run.targetId()
+                );
                 return;
             }
             runStore.markFinished(runId);
+            evalMetrics.runTerminal(run.targetId(), "FINISHED");
+            log.info(
+                    "eval_event=run_terminal run_id={} dataset_id={} target_id={} status=FINISHED",
+                    runId,
+                    run.datasetId(),
+                    run.targetId()
+            );
         } catch (Exception e) {
             // P0：避免线程异常导致 run 永远停在 RUNNING（无法验收/无法排障）
             log.error("RunRunner crashed: runId={}", runId, e);
@@ -103,6 +161,20 @@ public class RunRunner {
                 reason += ":" + truncate(msg.trim(), 200);
             }
             runStore.markCancelled(runId, reason);
+            try {
+                EvalRun r = runStore.getRun(runId).orElse(null);
+                if (r != null) {
+                    evalMetrics.runTerminal(r.targetId(), "CANCELLED");
+                    log.info(
+                            "eval_event=run_terminal run_id={} dataset_id={} target_id={} status=CANCELLED reason=runner_crash",
+                            runId,
+                            r.datasetId(),
+                            r.targetId()
+                    );
+                }
+            } catch (Exception ignored) {
+                // 指标/日志不应影响取消落库
+            }
         }
     }
 
@@ -127,8 +199,21 @@ public class RunRunner {
         long t0 = System.nanoTime();
         Verdict verdict;
         ErrorCode errorCode;
+        boolean acquired = false;
 
         try {
+            int timeoutMs = evalProperties == null ? 0 : evalProperties.getRunner().getAcquireTimeoutMs();
+            acquired = permits.tryAcquire(Math.max(0, timeoutMs), TimeUnit.MILLISECONDS);
+            if (!acquired) {
+                evalMetrics.runnerSemaphoreTimeout(run.targetId());
+                debug.put("verdict_reason", "eval_rate_limited");
+                verdict = Verdict.FAIL;
+                errorCode = ErrorCode.RATE_LIMITED;
+                long latencyMs = (System.nanoTime() - t0) / 1_000_000L;
+                return new EvalResult(run.runId(), run.datasetId(), run.targetId(), c.caseId(), verdict,
+                        errorCode, latencyMs, now, debug);
+            }
+
             TargetClient.TargetResponse tr = targetClient.postEvalChat(run.targetId(), baseUrl, run.runId(), run.datasetId(), c.caseId(), c.question());
             long latencyMs = tr.latencyMs();
 
@@ -167,6 +252,11 @@ public class RunRunner {
             String msg = e.getMessage();
             if (msg != null && !msg.isBlank()) {
                 debug.put("exception_message", msg);
+            }
+        }
+        finally {
+            if (acquired) {
+                permits.release();
             }
         }
 

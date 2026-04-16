@@ -2,8 +2,12 @@ package com.vagent.eval.run;
 
 import com.vagent.eval.dataset.DatasetStore;
 import com.vagent.eval.dataset.Model.EvalCase;
+import com.vagent.eval.audit.EvalAuditService;
+import com.vagent.eval.observability.EvalMetrics;
 import com.vagent.eval.run.RunModel.EvalResult;
 import com.vagent.eval.run.RunModel.EvalRun;
+import com.vagent.eval.security.EvalApiSecurityFilter;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 
@@ -15,7 +19,8 @@ import java.util.NoSuchElementException;
  * Day3/Day7：Run API（创建 / 查询 / 取消 / 结果列表 / 汇总报表）。
  * <p>
  * P0 允许串行执行，因此 createRun 后立即后台启动执行线程；前端/脚本用 GET 查询进度与结果。
- * Day7 增加 {@code GET .../report}，输出 {@link RunReportService} 计算的 v1 指标。
+ * Day7 增加 {@code GET .../report}，输出 {@link RunReportService} 计算的 v1 指标；
+ * P0+ S3 增加 {@code GET .../report/buckets}，输出 {@link RunBucketReportService} 的分桶子报表。
  */
 @RestController
 @RequestMapping(path = "/api/v1/eval/runs", produces = MediaType.APPLICATION_JSON_VALUE)
@@ -28,19 +33,33 @@ public class RunApi {
     private final RunStore runStore;
     private final RunRunner runRunner;
     private final RunReportService runReportService;
+    private final RunBucketReportService runBucketReportService;
+    private final EvalMetrics evalMetrics;
+    private final EvalAuditService audit;
 
-    public RunApi(DatasetStore datasetStore, RunStore runStore, RunRunner runRunner, RunReportService runReportService) {
+    public RunApi(
+            DatasetStore datasetStore,
+            RunStore runStore,
+            RunRunner runRunner,
+            RunReportService runReportService,
+            RunBucketReportService runBucketReportService,
+            EvalMetrics evalMetrics,
+            EvalAuditService audit
+    ) {
         this.datasetStore = datasetStore;
         this.runStore = runStore;
         this.runRunner = runRunner;
         this.runReportService = runReportService;
+        this.runBucketReportService = runBucketReportService;
+        this.evalMetrics = evalMetrics;
+        this.audit = audit;
     }
 
     public record CreateRunRequest(String datasetId, String targetId) {
     }
 
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE)
-    public EvalRun create(@RequestBody CreateRunRequest req) {
+    public EvalRun create(@RequestBody CreateRunRequest req, HttpServletRequest httpReq) {
         if (req == null || req.datasetId() == null || req.targetId() == null) {
             throw new IllegalArgumentException("dataset_id and target_id are required");
         }
@@ -50,6 +69,21 @@ public class RunApi {
 
         int total = datasetStore.caseCount(datasetId);
         EvalRun run = runStore.createRun(datasetId, targetId, total);
+        // 阶段二：创建成功即计数（异步线程尚未启动也不影响“创建意图”统计）
+        evalMetrics.runCreated(targetId);
+        // 阶段三：管理面审计（actor=local_dev）；此处仅记录成功创建的证据链
+        audit.record(
+                "RUN_CREATE",
+                "OK",
+                "USER_REQUEST",
+                EvalApiSecurityFilter.clientIp(httpReq),
+                httpReq.getMethod(),
+                httpReq.getRequestURI(),
+                run.runId(),
+                datasetId,
+                targetId,
+                Map.of("total_cases", total)
+        );
         runRunner.startAsync(run.runId());
         return run;
     }
@@ -64,13 +98,49 @@ public class RunApi {
         return runStore.getRun(runId).orElseThrow(() -> new NoSuchElementException("run not found"));
     }
 
+    /**
+     * P1：删除 run（合规/删除权）。管理面受 {@code EvalApiSecurityFilter} 保护。
+     */
+    @DeleteMapping("/{runId}")
+    public Map<String, Object> delete(@PathVariable String runId, HttpServletRequest httpReq) {
+        boolean ok = runStore.deleteRun(runId);
+        if (!ok) {
+            throw new NoSuchElementException("run not found");
+        }
+        audit.record(
+                "RUN_DELETE",
+                "OK",
+                "USER_REQUEST",
+                EvalApiSecurityFilter.clientIp(httpReq),
+                httpReq.getMethod(),
+                httpReq.getRequestURI(),
+                runId,
+                null,
+                null,
+                Map.of()
+        );
+        return Map.of("run_id", runId, "deleted", true);
+    }
+
     @PostMapping("/{runId}/cancel")
-    public EvalRun cancel(@PathVariable String runId, @RequestBody(required = false) Map<String, Object> body) {
+    public EvalRun cancel(@PathVariable String runId, @RequestBody(required = false) Map<String, Object> body, HttpServletRequest httpReq) {
         String reason = "";
         if (body != null && body.get("reason") != null) {
             reason = String.valueOf(body.get("reason"));
         }
         runStore.requestCancel(runId, reason);
+        audit.record(
+                "RUN_CANCEL",
+                "OK",
+                "USER_REQUEST",
+                EvalApiSecurityFilter.clientIp(httpReq),
+                httpReq.getMethod(),
+                httpReq.getRequestURI(),
+                runId,
+                null,
+                null,
+                reason == null || reason.isBlank() ? Map.of() : Map.of("reason", reason)
+        );
         // 如果还没开始或正在跑，runner 会在下一题前停下并标记 CANCELLED。
         return runStore.getRun(runId).orElseThrow(() -> new NoSuchElementException("run not found"));
     }
@@ -110,6 +180,21 @@ public class RunApi {
     ) {
         int n = Math.min(REPORT_ERROR_CODE_TOP_N_MAX, Math.max(REPORT_ERROR_CODE_TOP_N_MIN, errorCodeTopN));
         return runReportService.buildReport(runId, n);
+    }
+
+    /**
+     * P0+ S3：按 {@code tags} 前缀分桶的子报表（同一次 run）。
+     *
+     * @param tagPrefixes 可重复传参（例如多次 {@code tag_prefix=attack/}）；不传则使用默认三桶
+     */
+    @GetMapping("/{runId}/report/buckets")
+    public Map<String, Object> reportBuckets(
+            @PathVariable String runId,
+            @RequestParam(name = "tag_prefix", required = false) List<String> tagPrefixes,
+            @RequestParam(name = "error_code_top_n", defaultValue = "5") int errorCodeTopN
+    ) {
+        int n = Math.min(REPORT_ERROR_CODE_TOP_N_MAX, Math.max(REPORT_ERROR_CODE_TOP_N_MIN, errorCodeTopN));
+        return runBucketReportService.buildBuckets(runId, tagPrefixes, n);
     }
 }
 

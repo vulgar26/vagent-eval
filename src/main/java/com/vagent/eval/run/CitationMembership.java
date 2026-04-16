@@ -1,5 +1,7 @@
 package com.vagent.eval.run;
 
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -23,6 +25,11 @@ public final class CitationMembership {
 
     private CitationMembership() {
     }
+
+    /**
+     * P0+：基于 {@code X-Eval-Token} 派生 per-case key 的版本化前缀（与 eval-upgrade.md 对齐）。
+     */
+    public static final String HITID_KEY_DERIVATION_PREFIX_V1 = "hitid-key/v1|";
 
     /**
      * 将 chunk / 引用条目的原始 {@code id} 字符串规范化为 canonical 形式，用于跨层比对。
@@ -69,6 +76,30 @@ public final class CitationMembership {
     }
 
     /**
+     * P0+：从 {@code X-Eval-Token} 派生「本次 case 的 membership key」（HMAC-SHA256）。
+     * <p>
+     * 派生输入串（UTF-8）：{@code "hitid-key/v1|" + targetId + "|" + datasetId + "|" + caseId}。
+     * 该 key 再用于对 canonical hitId 做二次 HMAC，生成 {@code meta.retrieval_hit_id_hashes[]} 中的元素。
+     */
+    public static byte[] deriveCaseKeyV1(String evalToken, String targetId, String datasetId, String caseId) {
+        String token = evalToken == null ? "" : evalToken;
+        String t = targetId == null ? "" : targetId;
+        String d = datasetId == null ? "" : datasetId;
+        String c = caseId == null ? "" : caseId;
+        String msg = HITID_KEY_DERIVATION_PREFIX_V1 + t + "|" + d + "|" + c;
+        return hmacSha256(token.getBytes(StandardCharsets.UTF_8), msg.getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
+     * P0+：对 canonical hitId 做 HMAC-SHA256，并输出小写十六进制（用于与 {@code meta.retrieval_hit_id_hashes[]} 比对）。
+     */
+    public static String hitIdHashHexV1(byte[] caseKey, String canonicalHitId) {
+        byte[] k = caseKey == null ? new byte[0] : caseKey;
+        String id = canonicalHitId == null ? "" : canonicalHitId;
+        return HexFormat.of().formatHex(hmacSha256(k, id.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    /**
      * 与哈希拼接逻辑配套的分隔符常量，供文档或其它模块引用同一字符。
      */
     public static final char RECORD_SEPARATOR = '\u001E';
@@ -86,6 +117,16 @@ public final class CitationMembership {
             return HexFormat.of().formatHex(digest);
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException("SHA-256 not available", e);
+        }
+    }
+
+    static byte[] hmacSha256(byte[] key, byte[] msg) {
+        try {
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(key == null ? new byte[0] : key, "HmacSHA256"));
+            return mac.doFinal(msg == null ? new byte[0] : msg);
+        } catch (Exception e) {
+            throw new IllegalStateException("HmacSHA256 not available", e);
         }
     }
 }

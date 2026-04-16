@@ -1,0 +1,2 @@
+{"case_id":"ci_smoke_answer","question":"用一句话解释什么是 RAG。","expected_behavior":"answer","requires_citations":false,"tags":["ci","smoke"],"tool_policy":"disabled"}
+{"case_id":"ci_smoke_clarify","question":"如果问题含糊不清、缺少关键条件，你会怎么做？","expected_behavior":"clarify","requires_citations":false,"tags":["ci","smoke"],"tool_policy":"disabled"}

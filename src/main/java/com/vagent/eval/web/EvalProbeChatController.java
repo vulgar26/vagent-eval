@@ -1,6 +1,7 @@
 package com.vagent.eval.web;
 
 import com.vagent.eval.config.EvalProperties;
+import com.vagent.eval.run.CitationMembership;
 import com.vagent.eval.run.TargetClient;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.MediaType;
@@ -23,8 +24,9 @@ import java.util.Map;
  * {@link com.vagent.eval.run.RunRunner} → {@link com.vagent.eval.run.RunEvaluator} 走完整判定链；
  * <strong>不包含</strong>业务评测逻辑（逻辑全在 {@code run} 包）。
  * <p>
- * Day6：读取 {@link TargetClient} 发出的 membership 头，在 {@code CITATIONS_OK} / {@code CITATIONS_BAD_MEMBER}
- * 场景下返回 {@code retrieval_hits}，与 {@link com.vagent.eval.run.CitationMembership} + {@code eval.membership.top-n} 对齐。
+ * P0+：读取 {@link TargetClient} 发出的 eval 头（run/dataset/case/target/token）与 membership 头，
+ * 在 citations 场景下返回 {@code meta.retrieval_hit_id_hashes}（前 N 条），与 {@link CitationMembership} 的
+ * HMAC membership 规则对齐；仍可选返回 {@code retrieval_hits} 便于人读/排障。
  */
 @RestController
 @ConditionalOnProperty(prefix = "eval.probe", name = "enabled", havingValue = "true")
@@ -53,19 +55,27 @@ public class EvalProbeChatController {
     @PostMapping(path = "/api/v1/eval/chat", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public Map<String, Object> evalChat(
             @RequestBody Map<String, Object> body,
-            @RequestHeader(value = TargetClient.HDR_MEMBERSHIP_TOP_N, required = false) String topNHdr
+            @RequestHeader(value = TargetClient.HDR_MEMBERSHIP_TOP_N, required = false) String topNHdr,
+            @RequestHeader(value = "X-Eval-Token", required = false) String evalToken,
+            @RequestHeader(value = "X-Eval-Dataset-Id", required = false) String datasetId,
+            @RequestHeader(value = "X-Eval-Case-Id", required = false) String caseId,
+            @RequestHeader(value = "X-Eval-Target-Id", required = false) String targetId
     ) {
         int configuredTopN = evalProperties.getMembership().getTopN();
         int hintedTopN = parseTopNHeader(topNHdr, configuredTopN);
 
         Object q = body == null ? null : body.get("query");
         String query = q == null ? "" : String.valueOf(q);
+        String token = evalToken == null ? "" : evalToken.trim();
+        String tid = targetId == null ? "" : targetId.trim();
+        String ds = datasetId == null ? "" : datasetId.trim();
+        String cid = caseId == null ? "" : caseId.trim();
 
         // Day5：为了验收判定器 v1，提供几个稳定的“脚本关键词”来控制返回形态。
         // - BAD_CONTRACT：缺 latency_ms → CONTRACT_VIOLATION
         // - DENY_OK：behavior=deny（用于 expected_behavior 覆盖）
-        // - CITATIONS_OK：retrieval.supported=true 且 sources>=1 + Day6 retrieval_hits（membership 通过）
-        // - CITATIONS_BAD_MEMBER：hits 与 sources 故意不一致 → SOURCE_NOT_IN_HITS
+        // - CITATIONS_OK：retrieval.supported=true 且 sources>=1 + meta.retrieval_hit_id_hashes（membership 通过）
+        // - CITATIONS_BAD_MEMBER：hashes 与 sources 故意不一致 → SOURCE_NOT_IN_HITS
         // - TOOL_UNSUPPORTED：tools.supported=false（用于 SKIPPED_UNSUPPORTED 覆盖）
         if (query.contains("BAD_CONTRACT")) {
             Map<String, Object> caps = new LinkedHashMap<>();
@@ -81,7 +91,7 @@ public class EvalProbeChatController {
         }
 
         if (query.contains("CITATIONS_BAD_MEMBER")) {
-            return buildCitationsBadMember(query);
+            return buildCitationsBadMember(query, token, tid, ds, cid, hintedTopN);
         }
 
         Map<String, Object> caps = new LinkedHashMap<>();
@@ -97,7 +107,8 @@ public class EvalProbeChatController {
         ok.put("behavior", query.contains("DENY_OK") ? "deny" : "answer");
         ok.put("latency_ms", 1);
         ok.put("capabilities", caps);
-        ok.put("meta", Map.of("mode", "EVAL"));
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("mode", "EVAL");
 
         if (query.contains("CITATIONS_OK")) {
             // 故意使用大写 source id，与 hits 中小写 canonical 对齐，验收 Day6 canonical 规则
@@ -105,15 +116,26 @@ public class EvalProbeChatController {
                     Map.of("id", "KB_CHUNK_1", "title", "t1", "snippet", "s1")
             });
             // 检索排序：靠前者优先进入「前 N」；第 2 条用于填充列表（topN=1 时仅 kb_chunk_1 有效）
-            ok.put("retrieval_hits", buildRetrievalHitsList(hintedTopN));
+            List<Map<String, String>> hits = buildRetrievalHitsList(hintedTopN);
+            ok.put("retrieval_hits", hits);
+            meta.put("retrieval_hit_id_hashes", buildHitIdHashes(token, tid, ds, cid, hits, hintedTopN));
+            meta.put("canonical_hit_id_scheme", "lower_trim_v1");
         }
+        ok.put("meta", meta);
         return ok;
     }
 
     /**
      * 构造「引用 id 不在候选 hashed 集合」场景：hits 仅含 only_hit，sources 引用 forged_chunk。
      */
-    private static Map<String, Object> buildCitationsBadMember(String query) {
+    private static Map<String, Object> buildCitationsBadMember(
+            String query,
+            String evalToken,
+            String targetId,
+            String datasetId,
+            String caseId,
+            int hintedTopN
+    ) {
         Map<String, Object> caps = new LinkedHashMap<>();
         boolean toolsSupported = !query.contains("TOOL_UNSUPPORTED");
         caps.put("retrieval", Map.of("supported", true, "score", false));
@@ -126,10 +148,13 @@ public class EvalProbeChatController {
         m.put("behavior", "answer");
         m.put("latency_ms", 1);
         m.put("capabilities", caps);
-        m.put("meta", Map.of("mode", "EVAL"));
-        m.put("retrieval_hits", new Object[]{
-                Map.of("id", "only_hit", "title", "h1", "snippet", "hs")
-        });
+        List<Map<String, String>> hits = List.of(Map.of("id", "only_hit", "title", "h1", "snippet", "hs"));
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("mode", "EVAL");
+        meta.put("retrieval_hit_id_hashes", buildHitIdHashes(evalToken, targetId, datasetId, caseId, hits, hintedTopN));
+        meta.put("canonical_hit_id_scheme", "lower_trim_v1");
+        m.put("meta", meta);
+        m.put("retrieval_hits", hits);
         m.put("sources", new Object[]{
                 Map.of("id", "forged_chunk", "title", "x", "snippet", "y")
         });
@@ -150,6 +175,26 @@ public class EvalProbeChatController {
             list.add(Map.of("id", "kb_chunk_fill_" + i, "title", "f", "snippet", "f"));
         }
         return list;
+    }
+
+    private static List<String> buildHitIdHashes(
+            String evalToken,
+            String targetId,
+            String datasetId,
+            String caseId,
+            List<Map<String, String>> hits,
+            int hintedTopN
+    ) {
+        int topN = Math.min(Math.max(hintedTopN, 1), MEMBERSHIP_TOP_N_MAX);
+        byte[] caseKey = CitationMembership.deriveCaseKeyV1(evalToken, targetId, datasetId, caseId);
+        List<String> out = new ArrayList<>();
+        int limit = Math.min(topN, hits == null ? 0 : hits.size());
+        for (int i = 0; i < limit; i++) {
+            String raw = hits.get(i).get("id");
+            String canonical = CitationMembership.canonicalChunkId(raw);
+            out.add(CitationMembership.hitIdHashHexV1(caseKey, canonical));
+        }
+        return out;
     }
 
     /**

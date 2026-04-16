@@ -1,0 +1,49 @@
+name: eval-demo-artifacts
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Nightly demo (probe only). Uses no external targets.
+    - cron: "0 18 * * *"
+
+jobs:
+  day10_demo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Start eval service (probe + admin API)
+        run: |
+          mvn -B spring-boot:run -Dspring-boot.run.arguments=--eval.api.enabled=true > eval.log 2>&1 &
+          for i in {1..80}; do
+            curl -fsS "http://localhost:8099/actuator/health" >/dev/null && break
+            sleep 0.5
+          done
+          curl -fsS "http://localhost:8099/actuator/health" >/dev/null
+
+      - name: Run Day10 export demo (report + compare)
+        env:
+          EVAL_BASE: http://localhost:8099
+        run: bash scripts/day10-export-demo.sh
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: day10-demo-out
+          path: |
+            out/day10-report.json
+            out/day10-compare.json
+            eval.log
+

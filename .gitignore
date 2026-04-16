@@ -35,6 +35,9 @@ build/
 ### Day10 script output ###
 out/
 
+### Local eval exports / scratch ###
+eval_run_*results.json
+
 ### VS Code ###
 .vscode/
 

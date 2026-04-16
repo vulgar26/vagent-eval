@@ -7,6 +7,7 @@ import org.springframework.stereotype.Component;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.regex.Pattern;
 
 /**
  * Day4：{@code POST /api/v1/eval/chat} 响应契约校验（SSOT：p0-execution-map 附录 C2/C3）。
@@ -18,9 +19,14 @@ import java.util.List;
  * </ul>
  * 必填顶层：{@code answer}、{@code behavior}、{@code latency_ms}、{@code capabilities}、{@code meta}。
  * {@code meta} 至少含 {@code mode}（附录 C2）。
+ * <p>
+ * {@code meta.retrieval_hit_id_hashes}：若出现且为<strong>非空</strong>数组，则每项须为 64 位小写 hex；
+ * <strong>空数组 {@code []} 视为未提供</strong>（与 {@link RunEvaluator} 中 {@code hasHashes} 判定一致），避免被测侧总序列化占位字段误伤 clarify/deny。
  */
 @Component
 public class EvalChatContractValidator {
+
+    private static final Pattern RETRIEVAL_HIT_ID_HASH_HEX = Pattern.compile("^[0-9a-f]{64}$");
 
     public record ContractOutcome(boolean ok, ErrorCode errorCode, String reason, List<String> violations) {
         public static ContractOutcome pass() {
@@ -99,6 +105,36 @@ public class EvalChatContractValidator {
                 violations.add("meta_missing_mode");
             } else if (!mode.isTextual()) {
                 violations.add("meta_mode_must_be_string");
+            }
+
+            // P0+：若返回非空 hashed membership 证据，则须为 string[] 且每项为 64hex（小写）。空 [] 不校验（等同未提供）。
+            JsonNode hashes = meta.get("retrieval_hit_id_hashes");
+            if (hashes != null && !hashes.isNull()) {
+                if (!hashes.isArray()) {
+                    violations.add("meta_retrieval_hit_id_hashes_must_be_array");
+                } else if (hashes.size() > 0) {
+                    for (int i = 0; i < hashes.size(); i++) {
+                        JsonNode h = hashes.get(i);
+                        if (h == null || !h.isTextual()) {
+                            violations.add("meta_retrieval_hit_id_hashes_must_be_strings");
+                            break;
+                        }
+                        String s = h.asText().trim().toLowerCase();
+                        if (!RETRIEVAL_HIT_ID_HASH_HEX.matcher(s).matches()) {
+                            violations.add("meta_retrieval_hit_id_hashes_must_be_sha256_hex64");
+                            break;
+                        }
+                    }
+                }
+            }
+
+            JsonNode lim = meta.get("retrieval_candidate_limit_n");
+            if (lim != null && !lim.isNull() && !lim.isNumber()) {
+                violations.add("meta_retrieval_candidate_limit_n_must_be_number");
+            }
+            JsonNode tot = meta.get("retrieval_candidate_total");
+            if (tot != null && !tot.isNull() && !tot.isNumber()) {
+                violations.add("meta_retrieval_candidate_total_must_be_number");
             }
         }
 

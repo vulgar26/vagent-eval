@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.vagent.eval.config.EvalProperties;
+import com.vagent.eval.observability.EvalMetrics;
 import org.springframework.stereotype.Component;
 
 import java.net.URI;
@@ -40,14 +41,16 @@ public class TargetClient {
     private final EvalProperties evalProperties;
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
+    private final EvalMetrics evalMetrics;
 
     /**
      * @param evalProperties 读取 targets 与 {@code eval.membership.*}
      * @param objectMapper   与 Spring MVC 一致的 JSON 序列化（请求体）
      */
-    public TargetClient(EvalProperties evalProperties, ObjectMapper objectMapper) {
+    public TargetClient(EvalProperties evalProperties, ObjectMapper objectMapper, EvalMetrics evalMetrics) {
         this.evalProperties = evalProperties;
         this.objectMapper = objectMapper;
+        this.evalMetrics = evalMetrics;
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(3))
                 .build();
@@ -81,7 +84,8 @@ public class TargetClient {
         // 使用 ObjectNode 显式写字段名，避免与全局 Jackson SNAKE_CASE 对 Java record 的序列化细节耦合导致下游解析异常。
         ObjectNode payload = objectMapper.createObjectNode();
         payload.put("query", query == null ? "" : query);
-        payload.put("mode", "EVAL");
+        String chatMode = normalizeChatMode(evalProperties.getRunner().getChatMode());
+        payload.put("mode", chatMode);
         payload.put("conversation_id", "conv_" + runId + "_" + caseId);
         String body = objectMapper.writeValueAsString(payload);
 
@@ -107,6 +111,8 @@ public class TargetClient {
 
         HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
         long latencyMs = (System.nanoTime() - t0) / 1_000_000L;
+        // 阶段二：记录下游 HTTP 耗时（不记录 URL/headers/body，避免标签爆炸与敏感信息泄露）
+        evalMetrics.targetHttp(targetId, resp.statusCode(), latencyMs);
 
         JsonNode json = null;
         try {
@@ -114,6 +120,20 @@ public class TargetClient {
         } catch (Exception ignored) {
         }
         return new TargetResponse(resp.statusCode(), json, latencyMs);
+    }
+
+    private static String normalizeChatMode(String raw) {
+        if (raw == null) {
+            return "EVAL";
+        }
+        String m = raw.trim();
+        if (m.isEmpty()) {
+            return "EVAL";
+        }
+        if ("EVAL_DEBUG".equalsIgnoreCase(m)) {
+            return "EVAL_DEBUG";
+        }
+        return "EVAL";
     }
 
     /**

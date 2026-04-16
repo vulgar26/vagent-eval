@@ -3,6 +3,7 @@ package com.vagent.eval.dataset;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.vagent.eval.audit.EvalAuditService;
 import com.vagent.eval.dataset.Model.EvalCase;
 import com.vagent.eval.dataset.Model.EvalDataset;
 import jakarta.servlet.http.HttpServletRequest;
@@ -13,6 +14,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
+import com.vagent.eval.security.EvalApiSecurityFilter;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
@@ -31,10 +33,12 @@ public class DatasetApi {
 
     private final DatasetStore store;
     private final ObjectMapper objectMapper;
+    private final EvalAuditService audit;
 
-    public DatasetApi(DatasetStore store, ObjectMapper objectMapper) {
+    public DatasetApi(DatasetStore store, ObjectMapper objectMapper, EvalAuditService audit) {
         this.store = store;
         this.objectMapper = objectMapper;
+        this.audit = audit;
     }
 
     public record CreateDatasetRequest(
@@ -45,14 +49,30 @@ public class DatasetApi {
     }
 
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE)
-    public EvalDataset create(@RequestBody CreateDatasetRequest req) {
+    public EvalDataset create(@RequestBody CreateDatasetRequest req, HttpServletRequest httpReq) {
         String name = req == null ? null : req.name();
         String version = req == null ? null : req.version();
         String description = req == null ? null : req.description();
         if (!StringUtils.hasText(name) || !StringUtils.hasText(version)) {
             throw new IllegalArgumentException("name and version are required");
         }
-        return store.createDataset(name.trim(), version.trim(), description == null ? "" : description.trim());
+        EvalDataset ds = store.createDataset(name.trim(), version.trim(), description == null ? "" : description.trim());
+        audit.record(
+                "DATASET_CREATE",
+                "OK",
+                "USER_REQUEST",
+                EvalApiSecurityFilter.clientIp(httpReq),
+                httpReq.getMethod(),
+                httpReq.getRequestURI(),
+                null,
+                ds.datasetId(),
+                null,
+                Map.of(
+                        "name", ds.name(),
+                        "version", ds.version()
+                )
+        );
+        return ds;
     }
 
     @GetMapping
@@ -63,6 +83,30 @@ public class DatasetApi {
     @GetMapping("/{datasetId}")
     public EvalDataset get(@PathVariable String datasetId) {
         return store.getDataset(datasetId).orElseThrow(() -> new NoSuchElementException("dataset not found"));
+    }
+
+    /**
+     * P1：删除 dataset（合规/删除权）。管理面受 {@code EvalApiSecurityFilter} 保护。
+     */
+    @DeleteMapping("/{datasetId}")
+    public Map<String, Object> delete(@PathVariable String datasetId, HttpServletRequest httpReq) {
+        boolean ok = store.deleteDataset(datasetId);
+        if (!ok) {
+            throw new NoSuchElementException("dataset not found");
+        }
+        audit.record(
+                "DATASET_DELETE",
+                "OK",
+                "USER_REQUEST",
+                EvalApiSecurityFilter.clientIp(httpReq),
+                httpReq.getMethod(),
+                httpReq.getRequestURI(),
+                null,
+                datasetId,
+                null,
+                Map.of()
+        );
+        return Map.of("dataset_id", datasetId, "deleted", true);
     }
 
     @GetMapping("/{datasetId}/cases")
@@ -90,6 +134,9 @@ public class DatasetApi {
         String contentType = request.getContentType() == null ? "" : request.getContentType().toLowerCase(Locale.ROOT);
         byte[] payload = normalizeToUtf8(request.getInputStream().readAllBytes());
 
+        // 先校验 dataset 存在：如果不存在，直接 404（由 ApiExceptionHandler 记录 DATASET_API_ERROR NOT_FOUND 审计）
+        store.getDataset(datasetId).orElseThrow(() -> new NoSuchElementException("dataset not found"));
+
         int imported;
         if (contentType.contains("text/csv")) {
             imported = importCsv(datasetId, payload);
@@ -101,6 +148,23 @@ public class DatasetApi {
         }
 
         int total = store.caseCount(datasetId);
+        // 仅在“确实成功导入并将要返回 200”时记录 OK 审计；异常路径由 ApiExceptionHandler 兜底记录。
+        audit.record(
+                "DATASET_IMPORT",
+                "OK",
+                "USER_REQUEST",
+                EvalApiSecurityFilter.clientIp(request),
+                request.getMethod(),
+                request.getRequestURI(),
+                null,
+                datasetId,
+                null,
+                Map.of(
+                        "imported", imported,
+                        "case_count", total,
+                        "content_type", contentType
+                )
+        );
         return ResponseEntity.ok(Map.of(
                 "dataset_id", datasetId,
                 "imported", imported,

@@ -1,0 +1,97 @@
+name: eval-full-targets
+
+# 对真实 Vagent + travel-ai 各跑一轮 CI smoke（默认 2 题），导出 report。
+# 需先在仓库配置 Variables + Secret，见 docs/github-actions-secrets.md
+
+on:
+  workflow_dispatch:
+
+jobs:
+  full-eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Preflight (Variables / Secret)
+        id: preflight
+        run: |
+          skip=false
+          if [ -z "${{ vars.EVAL_TARGET_VAGENT_BASE_URL }}" ]; then skip=true; fi
+          if [ -z "${{ vars.EVAL_TARGET_TRAVEL_AI_BASE_URL }}" ]; then skip=true; fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+          if [ "$skip" = true ]; then
+            echo "::notice::Skip: set Actions Variables EVAL_TARGET_VAGENT_BASE_URL and EVAL_TARGET_TRAVEL_AI_BASE_URL (see docs/github-actions-secrets.md)"
+            exit 0
+          fi
+          if [ -z "${{ secrets.EVAL_DEFAULT_EVAL_TOKEN }}" ]; then
+            echo "::error::EVAL_DEFAULT_EVAL_TOKEN secret is empty (required when Variables are set)"
+            exit 1
+          fi
+
+      - name: Set up JDK 21
+        if: steps.preflight.outputs.skip != 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Install jq
+        if: steps.preflight.outputs.skip != 'true'
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Write Spring overlay (targets only; token via env)
+        if: steps.preflight.outputs.skip != 'true'
+        env:
+          VAGENT_URL: ${{ vars.EVAL_TARGET_VAGENT_BASE_URL }}
+          TRAVEL_URL: ${{ vars.EVAL_TARGET_TRAVEL_AI_BASE_URL }}
+        run: |
+          cat > /tmp/eval-ci-overlay.yml <<EOF
+          eval:
+            api:
+              enabled: true
+              require-https: false
+              token-hash: ""
+              allow-cidrs: []
+            targets:
+              - target-id: vagent
+                base-url: "${VAGENT_URL}"
+                enabled: true
+              - target-id: travel-ai
+                base-url: "${TRAVEL_URL}"
+                enabled: true
+          EOF
+
+      - name: Start vagent-eval
+        if: steps.preflight.outputs.skip != 'true'
+        env:
+          SPRING_CONFIG_ADDITIONAL_LOCATION: file:/tmp/eval-ci-overlay.yml
+          EVAL_DEFAULT_EVAL_TOKEN: ${{ secrets.EVAL_DEFAULT_EVAL_TOKEN }}
+          EVAL_MEMBERSHIP_SALT: ${{ secrets.EVAL_MEMBERSHIP_SALT }}
+        run: |
+          mvn -B spring-boot:run > eval.log 2>&1 &
+          for i in {1..120}; do
+            curl -fsS "http://localhost:8099/actuator/health" >/dev/null && break
+            sleep 0.5
+          done
+          curl -fsS "http://localhost:8099/actuator/health" >/dev/null
+
+      - name: Run CI full eval script
+        if: steps.preflight.outputs.skip != 'true'
+        env:
+          EVAL_BASE: http://localhost:8099
+        run: |
+          chmod +x scripts/ci-full-eval.sh
+          bash scripts/ci-full-eval.sh
+
+      - name: Upload artifacts
+        if: steps.preflight.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-full-targets-out
+          path: |
+            out/report-vagent.json
+            out/report-travel-ai.json
+            eval.log

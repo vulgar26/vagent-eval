@@ -101,8 +101,14 @@
 - `RunEvaluator.evaluate` 中 `behavior_mismatch` / `tool_not_satisfied` 两分支已改挂上述专码（不再使用 `UNKNOWN`）。  
 - 单测：`RunEvaluatorTest#behaviorMismatch_mapsToBehaviorMismatch_notUnknown`、`RunEvaluatorTest#toolExpected_toolBlockIncomplete_mapsToToolExpectationNotMet`。
 
-## 附录：S1-D3（P0+ §16.7 + X-Eval-Token）已落地（Eval）
+## 附录：S1-D3（P0+ citations 口径收敛 + X-Eval-Token）已落地（Eval）
 
-- **`EVAL_RULE_VERSION`** 递增至 **`p0.v3`**：`requires_citations=true` 且期望/实际均为 **`deny`**、且检索 **0 命中**（`retrieval_hits` 缺省/空数组，或 `meta.retrieve_hit_count` / `meta.retrieval_hit_count` 为 0）时，允许 **`sources` 为空**，`verdict_reason`=`citations_exempt_expected_deny_no_retrieval_hits`；**非空 `retrieval_hits` 仍要求非空 `sources`**（否则仍为 `missing_sources`）。  
+- **`EVAL_RULE_VERSION`** 当前为 **`p0.v4`**：`requires_citations=true` 时，仅在 `expected_behavior=answer` 路径上强制非空 `sources` + Day6 membership；对 **`clarify` / `deny` 等非 answer** 行为，`citations_enforced=false`（`citations_enforced_reason=expected_behavior_not_answer`），避免因空检索/低置信场景逼迫编造引用。  
 - **配置**：`eval.default-eval-token`、`eval.targets[].eval-token` → `TargetClient` 填充 **`X-Eval-Token`**（与 membership 头独立）。  
-- 单测：`RunEvaluatorTest` 中 §16.7 场景 3 条；`TargetClientEvalTokenTest`。
+- 单测：`RunEvaluatorTest`（含 citations 相关场景）；`TargetClientEvalTokenTest`。
+
+## 附录：P0+ S3（按 tags 分桶子报表）已落地（Eval）
+
+- **HTTP**：`GET /api/v1/eval/runs/{run_id}/report/buckets`（可重复 `tag_prefix`；默认三桶 `attack/`、`rag/empty`、`rag/low_conf`）  
+- **实现**：`RunBucketReportService`（`buckets_version=run.buckets.v1`）  
+- **脚本**：`scripts/p0plus-bucket-export.ps1`（同时导出 `/report` 与 `/report/buckets` 到 `out/`）

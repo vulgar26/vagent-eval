@@ -2,6 +2,8 @@ package com.vagent.eval.run;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.vagent.eval.config.EvalProperties;
+import com.vagent.eval.observability.EvalMetrics;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -22,7 +24,7 @@ class TargetClientEvalTokenTest {
         v.setEvalToken("secret-vagent");
         p.setTargets(List.of(v));
 
-        TargetClient tc = new TargetClient(p, new ObjectMapper());
+        TargetClient tc = new TargetClient(p, new ObjectMapper(), new EvalMetrics(new SimpleMeterRegistry()));
         assertThat(tc.resolveEvalToken("vagent")).isEqualTo("secret-vagent");
         assertThat(tc.resolveEvalToken("VAGENT")).isEqualTo("secret-vagent");
         assertThat(tc.resolveEvalToken("travel-ai")).isEqualTo("global-default");
@@ -37,7 +39,7 @@ class TargetClientEvalTokenTest {
         t.setEvalToken("   ");
         p.setTargets(List.of(t));
 
-        TargetClient tc = new TargetClient(p, new ObjectMapper());
+        TargetClient tc = new TargetClient(p, new ObjectMapper(), new EvalMetrics(new SimpleMeterRegistry()));
         assertThat(tc.resolveEvalToken("probe")).isEqualTo("fallback");
     }
 }

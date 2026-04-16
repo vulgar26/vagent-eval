@@ -25,3 +25,20 @@ eval:
       base-url: https://travel-ai.internal.example
       eval-token: ""
       enabled: false
+
+  # =========================
+  # 数据保留期 / 删除策略（P1）
+  # =========================
+  #
+  # 1) 手动删除（按 run_id）：DELETE /api/v1/eval/runs/{runId}
+  #    - 这是“立即删除”，用于合规/删除权或误跑清理
+  #    - 该管理 API 受 eval.api.* 安全链保护（enabled/CIDR/token-hash 等）
+  #
+  # 2) 自动清理（retention janitor）：定时删除“已结束且过期”的 run
+  #    - 默认关闭，避免本地开发误删证据；生产/CI 若需要控制 DB 体量可开启
+  #    - 仅删除 FINISHED/CANCELLED 且 finished_at < now - days 的 run（results 会级联删除）
+  retention:
+    enabled: false
+    days: 14
+    # 24h 扫一次（毫秒）。生产可按体量调小，但别过于频繁导致 DB 压力增大。
+    interval-ms: 86400000

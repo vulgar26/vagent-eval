@@ -91,6 +91,20 @@ public class DatasetStore {
         return casesByDatasetId.getOrDefault(datasetId, List.of()).size();
     }
 
+    /**
+     * P1：删除 dataset（含 cases）。用于合规/删除权；内存版直接移除。
+     *
+     * @return true 表示删除成功；false 表示不存在
+     */
+    public boolean deleteDataset(String datasetId) {
+        if (datasetId == null) {
+            return false;
+        }
+        EvalDatasetMutable removed = datasets.remove(datasetId);
+        casesByDatasetId.remove(datasetId);
+        return removed != null;
+    }
+
     private static final class EvalDatasetMutable {
         private final String datasetId;
         private final String name;

@@ -25,7 +25,41 @@ class RunEvaluatorTest {
         EvalProperties p = new EvalProperties();
         p.getMembership().setSalt(salt);
         p.getMembership().setTopN(topN);
+        p.setDefaultEvalToken("test-token");
         return p;
+    }
+
+    @Test
+    void securityBoundaryViolation_plainHitIdsWithoutEvalDebugMode_fails() throws Exception {
+        RunEvaluator evaluator = new RunEvaluator(new EvalChatContractValidator(), props("test-salt", 8));
+        String json = """
+                {
+                  "answer": "ok",
+                  "behavior": "answer",
+                  "latency_ms": 1,
+                  "capabilities": {
+                    "retrieval": {"supported": true, "score": false},
+                    "tools": {"supported": true, "outcome": true}
+                  },
+                  "meta": {"mode": "EVAL", "retrieval_hit_ids": ["kb_chunk_1"]},
+                  "sources": [
+                    {"id": "kb_chunk_1", "title": "t1", "snippet": "s1"}
+                  ]
+                }
+                """;
+        EvalCase c = new EvalCase(
+                "sec_1",
+                "ds",
+                "SEC",
+                EvalExpectedBehavior.ANSWER,
+                false,
+                List.of(),
+                Instant.parse("2026-04-10T00:00:00Z")
+        );
+        EvalOutcome o = evaluator.evaluate(c, om.readTree(json), "probe");
+        assertThat(o.verdict()).isEqualTo(Verdict.FAIL);
+        assertThat(o.errorCode()).isEqualTo(ErrorCode.SECURITY_BOUNDARY_VIOLATION);
+        assertThat(o.debug()).containsEntry("verdict_reason", "security_boundary_violation");
     }
 
     @Test
@@ -249,6 +283,12 @@ class RunEvaluatorTest {
     @Test
     void citations_membership_pass_canonicalCase() throws Exception {
         RunEvaluator evaluator = new RunEvaluator(new EvalChatContractValidator(), props("test-salt", 8));
+        String token = "test-token";
+        String targetId = "probe";
+        String datasetId = "ds";
+        String caseId = "d6_ok";
+        String canonicalHit = CitationMembership.canonicalChunkId("kb_chunk_1");
+        String hash = CitationMembership.hitIdHashHexV1(CitationMembership.deriveCaseKeyV1(token, targetId, datasetId, caseId), canonicalHit);
         String json = """
                 {
                   "answer": "ok",
@@ -258,25 +298,22 @@ class RunEvaluatorTest {
                     "retrieval": {"supported": true, "score": false},
                     "tools": {"supported": true, "outcome": true}
                   },
-                  "meta": {"mode": "EVAL"},
-                  "retrieval_hits": [
-                    {"id": "kb_chunk_1", "title": "h1", "snippet": "a"}
-                  ],
+                  "meta": {"mode": "EVAL", "retrieval_hit_id_hashes": ["%s"]},
                   "sources": [
                     {"id": "KB_CHUNK_1", "title": "t1", "snippet": "s1"}
                   ]
                 }
-                """;
+                """.formatted(hash);
         EvalCase c = new EvalCase(
-                "d6_ok",
-                "ds",
+                caseId,
+                datasetId,
                 "CITATIONS_OK",
                 EvalExpectedBehavior.ANSWER,
                 true,
                 List.of(),
                 Instant.parse("2026-04-10T00:00:00Z")
         );
-        EvalOutcome o = evaluator.evaluate(c, om.readTree(json), "probe");
+        EvalOutcome o = evaluator.evaluate(c, om.readTree(json), targetId);
         assertThat(o.verdict()).isEqualTo(Verdict.PASS);
         assertThat(o.errorCode()).isNull();
         assertThat(o.debug()).containsEntry("membership_ok", true);
@@ -286,6 +323,13 @@ class RunEvaluatorTest {
     @Test
     void citations_membership_fail_sourceNotInHits() throws Exception {
         RunEvaluator evaluator = new RunEvaluator(new EvalChatContractValidator(), props("test-salt", 8));
+        // hashes 列表不包含 forged_chunk 的 hash → 触发 SOURCE_NOT_IN_HITS
+        String token = "test-token";
+        String targetId = "probe";
+        String datasetId = "ds";
+        String caseId = "d6_bad";
+        String canonicalOnlyHit = CitationMembership.canonicalChunkId("only_hit");
+        String onlyHitHash = CitationMembership.hitIdHashHexV1(CitationMembership.deriveCaseKeyV1(token, targetId, datasetId, caseId), canonicalOnlyHit);
         String json = """
                 {
                   "answer": "ok",
@@ -295,25 +339,22 @@ class RunEvaluatorTest {
                     "retrieval": {"supported": true, "score": false},
                     "tools": {"supported": true, "outcome": true}
                   },
-                  "meta": {"mode": "EVAL"},
-                  "retrieval_hits": [
-                    {"id": "only_hit", "title": "h1", "snippet": "a"}
-                  ],
+                  "meta": {"mode": "EVAL", "retrieval_hit_id_hashes": ["%s"]},
                   "sources": [
                     {"id": "forged_chunk", "title": "t1", "snippet": "s1"}
                   ]
                 }
-                """;
+                """.formatted(onlyHitHash);
         EvalCase c = new EvalCase(
-                "d6_bad",
-                "ds",
+                caseId,
+                datasetId,
                 "CITATIONS_BAD_MEMBER",
                 EvalExpectedBehavior.ANSWER,
                 true,
                 List.of(),
                 Instant.parse("2026-04-10T00:00:00Z")
         );
-        EvalOutcome o = evaluator.evaluate(c, om.readTree(json), "probe");
+        EvalOutcome o = evaluator.evaluate(c, om.readTree(json), targetId);
         assertThat(o.verdict()).isEqualTo(Verdict.FAIL);
         assertThat(o.errorCode()).isEqualTo(ErrorCode.SOURCE_NOT_IN_HITS);
         assertThat(o.debug()).containsEntry("verdict_reason", "source_not_in_hits");
@@ -322,6 +363,13 @@ class RunEvaluatorTest {
     @Test
     void citations_membership_topN_excludesSecondHit() throws Exception {
         RunEvaluator evaluator = new RunEvaluator(new EvalChatContractValidator(), props("test-salt", 1));
+        String token = "test-token";
+        String targetId = "probe";
+        String datasetId = "ds";
+        String caseId = "d6_topn";
+        // topN=1，仅返回 first 的 hash；sources 引用 second 应失败
+        String canonicalFirst = CitationMembership.canonicalChunkId("first");
+        String firstHash = CitationMembership.hitIdHashHexV1(CitationMembership.deriveCaseKeyV1(token, targetId, datasetId, caseId), canonicalFirst);
         String json = """
                 {
                   "answer": "ok",
@@ -331,26 +379,22 @@ class RunEvaluatorTest {
                     "retrieval": {"supported": true, "score": false},
                     "tools": {"supported": true, "outcome": true}
                   },
-                  "meta": {"mode": "EVAL"},
-                  "retrieval_hits": [
-                    {"id": "first", "title": "a", "snippet": "a"},
-                    {"id": "second", "title": "b", "snippet": "b"}
-                  ],
+                  "meta": {"mode": "EVAL", "retrieval_hit_id_hashes": ["%s"]},
                   "sources": [
                     {"id": "second", "title": "t", "snippet": "s"}
                   ]
                 }
-                """;
+                """.formatted(firstHash);
         EvalCase c = new EvalCase(
-                "d6_topn",
-                "ds",
+                caseId,
+                datasetId,
                 "x",
                 EvalExpectedBehavior.ANSWER,
                 true,
                 List.of(),
                 Instant.parse("2026-04-10T00:00:00Z")
         );
-        EvalOutcome o = evaluator.evaluate(c, om.readTree(json), "probe");
+        EvalOutcome o = evaluator.evaluate(c, om.readTree(json), targetId);
         assertThat(o.verdict()).isEqualTo(Verdict.FAIL);
         assertThat(o.errorCode()).isEqualTo(ErrorCode.SOURCE_NOT_IN_HITS);
     }
