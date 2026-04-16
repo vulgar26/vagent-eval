@@ -12,8 +12,33 @@ mvn spring-boot:run
 
 - 健康检查：`GET http://localhost:8099/actuator/health`
 - 进程与 target 配置摘要：`GET http://localhost:8099/internal/eval/status`（不含 token）
+- 指标（Prometheus scrape 入口，阶段二）：`GET http://localhost:8099/actuator/prometheus`
 
 配置见 `src/main/resources/application.yml`；生产示例见 `application-example.yml`（勿提交真实密钥）。
+
+## 阶段 1~3（已落地）概要
+
+- **阶段一：持久化（PostgreSQL）**：`eval_run` / `eval_result` 落库，重启不丢；支持 `DELETE /runs/{id}` 与自动 retention 清理（可配置）。
+- **阶段二：可观测（Micrometer）**：暴露 `/actuator/prometheus`，记录 run/case 计数与下游 HTTP 耗时；`RunRunner` 输出 key=value 结构化日志。
+- **阶段三：审计与合规**：`eval_audit_event` 落库；管理面成功/失败/安全拒绝均可追溯；debug 写库与出站均做脱敏+截断，且采用白名单策略。
+
+> 本地开发建议在 `application-local.yml` 配置 datasource/target/token 等；该文件已加入 `.gitignore`，请勿提交密码与明文 token。
+
+## 数据保留期与删除（P1）
+
+vagent-eval 的“评测证据”会落库（PostgreSQL 表 `eval_run` / `eval_result`），需要明确的删除策略：
+
+- **手动删除**：`DELETE /api/v1/eval/runs/{runId}`（results 级联删除）
+- **自动清理（retention）**：配置 `eval.retention.enabled/days/interval-ms` 后，定时删除 `FINISHED/CANCELLED` 且 `finished_at < now - days` 的 run
+
+## Debug 脱敏与白名单（阶段三）
+
+逐题结果会写入 `eval_result.debug_json`，并在 `GET /api/v1/eval/runs/{runId}/results` 返回 debug。
+为避免敏感信息落库或出站，服务端会做两层清洗（见 `com.vagent.eval.security.DebugSanitizer`）：
+
+- **敏感键永不保留明文**（如 `query`/`answer`/`token`）：替换为 `*_len` + `*_sha256`
+- **白名单优先**：仅允许的 key（或允许前缀 `membership_`）才会保留，其它默认丢弃（并记录 `debug_dropped_keys_count`）
+- **体量可控**：字符串/列表/key 数均有限制，避免 debug 过大拖慢 DB 与网络
 
 ## Day2 草案
 
