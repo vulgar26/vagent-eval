@@ -7,8 +7,10 @@ import com.vagent.eval.dataset.Model.EvalDataset;
 import com.vagent.eval.run.RunModel.ErrorCode;
 import com.vagent.eval.run.RunModel.EvalResult;
 import com.vagent.eval.run.RunModel.EvalRun;
+import com.vagent.eval.run.RunModel.RunStatus;
 import com.vagent.eval.run.RunModel.Verdict;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 
 import java.time.Instant;
 import java.util.List;
@@ -24,7 +26,7 @@ class RunBucketReportServiceTest {
     @Test
     void buckets_filterByTagPrefix_andUseBucketTotalAsRateDenominator() {
         DatasetStore datasets = new DatasetStore();
-        RunStore runs = new RunStore();
+        RunStore runs = Mockito.mock(RunStore.class);
         RunBucketReportService svc = new RunBucketReportService(datasets, runs);
 
         EvalDataset ds = datasets.createDataset("bucket-test", "1", "unit test");
@@ -38,13 +40,29 @@ class RunBucketReportServiceTest {
                 new EvalCase("x1", datasetId, "q4", EvalExpectedBehavior.ANSWER, false, List.of("other"), createdAt)
         ));
 
-        EvalRun run = runs.createRun(datasetId, "probe", 4);
-        String runId = run.runId();
+        String runId = "run_bucket_test";
+        EvalRun run = new EvalRun(
+                runId,
+                datasetId,
+                "probe",
+                RunStatus.PENDING,
+                4,
+                0,
+                createdAt,
+                null,
+                null,
+                ""
+        );
 
-        runs.appendResult(new EvalResult(runId, datasetId, "probe", "a1", Verdict.PASS, null, 10, createdAt, Map.of()));
-        runs.appendResult(new EvalResult(runId, datasetId, "probe", "a2", Verdict.FAIL, ErrorCode.CONTRACT_VIOLATION, 11, createdAt, Map.of()));
-        runs.appendResult(new EvalResult(runId, datasetId, "probe", "r1", Verdict.PASS, null, 12, createdAt, Map.of()));
-        runs.appendResult(new EvalResult(runId, datasetId, "probe", "x1", Verdict.PASS, null, 13, createdAt, Map.of()));
+        List<EvalResult> results = List.of(
+                new EvalResult(runId, datasetId, "probe", "a1", Verdict.PASS, null, 10, createdAt, Map.of()),
+                new EvalResult(runId, datasetId, "probe", "a2", Verdict.FAIL, ErrorCode.CONTRACT_VIOLATION, 11, createdAt, Map.of()),
+                new EvalResult(runId, datasetId, "probe", "r1", Verdict.PASS, null, 12, createdAt, Map.of()),
+                new EvalResult(runId, datasetId, "probe", "x1", Verdict.PASS, null, 13, createdAt, Map.of())
+        );
+
+        Mockito.when(runs.getRun(runId)).thenReturn(java.util.Optional.of(run));
+        Mockito.when(runs.listAllResults(runId)).thenReturn(results);
 
         Map<String, Object> out = svc.buildBuckets(runId, List.of("attack/", "rag/"), 5);
         assertThat(out.get("buckets_version")).isEqualTo(RunBucketReportService.BUCKETS_VERSION);
@@ -80,7 +98,7 @@ class RunBucketReportServiceTest {
     @Test
     void defaultPrefixes_returnThreeBuckets_evenIfEmpty() {
         DatasetStore datasets = new DatasetStore();
-        RunStore runs = new RunStore();
+        RunStore runs = Mockito.mock(RunStore.class);
         RunBucketReportService svc = new RunBucketReportService(datasets, runs);
 
         EvalDataset ds = datasets.createDataset("bucket-defaults", "1", "unit test");
@@ -90,9 +108,26 @@ class RunBucketReportServiceTest {
                 new EvalCase("c1", datasetId, "q", EvalExpectedBehavior.ANSWER, false, List.of("misc"), createdAt)
         ));
 
-        EvalRun run = runs.createRun(datasetId, "probe", 1);
-        String runId = run.runId();
-        runs.appendResult(new EvalResult(runId, datasetId, "probe", "c1", Verdict.PASS, null, 1, createdAt, Map.of()));
+        String runId = "run_bucket_defaults_test";
+        EvalRun run = new EvalRun(
+                runId,
+                datasetId,
+                "probe",
+                RunStatus.PENDING,
+                1,
+                0,
+                createdAt,
+                null,
+                null,
+                ""
+        );
+
+        List<EvalResult> results = List.of(
+                new EvalResult(runId, datasetId, "probe", "c1", Verdict.PASS, null, 1, createdAt, Map.of())
+        );
+
+        Mockito.when(runs.getRun(runId)).thenReturn(java.util.Optional.of(run));
+        Mockito.when(runs.listAllResults(runId)).thenReturn(results);
 
         Map<String, Object> out = svc.buildBuckets(runId, null, 5);
         @SuppressWarnings("unchecked")

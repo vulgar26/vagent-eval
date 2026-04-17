@@ -31,7 +31,7 @@ public class RunApi {
 
     private final DatasetStore datasetStore;
     private final RunStore runStore;
-    private final RunRunner runRunner;
+    private final TargetRunScheduler scheduler;
     private final RunReportService runReportService;
     private final RunBucketReportService runBucketReportService;
     private final EvalMetrics evalMetrics;
@@ -40,7 +40,7 @@ public class RunApi {
     public RunApi(
             DatasetStore datasetStore,
             RunStore runStore,
-            RunRunner runRunner,
+            TargetRunScheduler scheduler,
             RunReportService runReportService,
             RunBucketReportService runBucketReportService,
             EvalMetrics evalMetrics,
@@ -48,7 +48,7 @@ public class RunApi {
     ) {
         this.datasetStore = datasetStore;
         this.runStore = runStore;
-        this.runRunner = runRunner;
+        this.scheduler = scheduler;
         this.runReportService = runReportService;
         this.runBucketReportService = runBucketReportService;
         this.evalMetrics = evalMetrics;
@@ -84,7 +84,7 @@ public class RunApi {
                 targetId,
                 Map.of("total_cases", total)
         );
-        runRunner.startAsync(run.runId());
+        scheduler.enqueue(targetId, run.runId());
         return run;
     }
 

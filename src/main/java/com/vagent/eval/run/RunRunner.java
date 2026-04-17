@@ -17,8 +17,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
-import java.util.concurrent.Semaphore;
-import java.util.concurrent.TimeUnit;
 
 /**
  * Day3/Day6：串行执行器。
@@ -50,7 +48,6 @@ public class RunRunner {
     private final RunEvaluator evaluator;
     private final EvalProperties evalProperties;
     private final EvalMetrics evalMetrics;
-    private final Semaphore permits;
 
     public RunRunner(
             DatasetStore datasetStore,
@@ -66,20 +63,31 @@ public class RunRunner {
         this.evaluator = evaluator;
         this.evalProperties = evalProperties;
         this.evalMetrics = evalMetrics;
-        int max = evalProperties == null ? 8 : evalProperties.getRunner().getMaxConcurrency();
-        this.permits = new Semaphore(Math.max(1, max), true);
     }
 
-    public void startAsync(String runId) {
-        Thread t = new Thread(() -> execute(runId), "run-runner-" + runId);
-        t.setDaemon(true);
-        t.start();
-    }
-
-    private void execute(String runId) {
-        runStore.markStarted(runId);
+    /**
+     * 阶段四：由 {@link TargetRunScheduler} 的 lane worker 调用执行。
+     * <p>
+     * 注意：这里<strong>不再</strong>自行创建线程；线程模型由调度器统一管理。
+     */
+    void execute(String runId) {
         try {
             EvalRun run = runStore.getRun(runId).orElseThrow(() -> new NoSuchElementException("run not found"));
+
+            // 若 run 在队列中等待期间被取消，则无需进入 RUNNING；直接落终态。
+            if (runStore.isCancelRequested(runId)) {
+                runStore.markCancelled(runId, run.cancelReason());
+                evalMetrics.runTerminal(run.targetId(), "CANCELLED");
+                log.info(
+                        "eval_event=run_terminal run_id={} dataset_id={} target_id={} status=CANCELLED reason=user_cancel_before_start",
+                        runId,
+                        run.datasetId(),
+                        run.targetId()
+                );
+                return;
+            }
+
+            runStore.markStarted(runId);
 
             // 阶段二：结构化日志（key=value），便于 grep/采集；不打印题干/答案全文
             log.info(
@@ -199,21 +207,8 @@ public class RunRunner {
         long t0 = System.nanoTime();
         Verdict verdict;
         ErrorCode errorCode;
-        boolean acquired = false;
 
         try {
-            int timeoutMs = evalProperties == null ? 0 : evalProperties.getRunner().getAcquireTimeoutMs();
-            acquired = permits.tryAcquire(Math.max(0, timeoutMs), TimeUnit.MILLISECONDS);
-            if (!acquired) {
-                evalMetrics.runnerSemaphoreTimeout(run.targetId());
-                debug.put("verdict_reason", "eval_rate_limited");
-                verdict = Verdict.FAIL;
-                errorCode = ErrorCode.RATE_LIMITED;
-                long latencyMs = (System.nanoTime() - t0) / 1_000_000L;
-                return new EvalResult(run.runId(), run.datasetId(), run.targetId(), c.caseId(), verdict,
-                        errorCode, latencyMs, now, debug);
-            }
-
             TargetClient.TargetResponse tr = targetClient.postEvalChat(run.targetId(), baseUrl, run.runId(), run.datasetId(), c.caseId(), c.question());
             long latencyMs = tr.latencyMs();
 
@@ -252,11 +247,6 @@ public class RunRunner {
             String msg = e.getMessage();
             if (msg != null && !msg.isBlank()) {
                 debug.put("exception_message", msg);
-            }
-        }
-        finally {
-            if (acquired) {
-                permits.release();
             }
         }
 

@@ -4,41 +4,28 @@ P0 统一评测服务（独立部署）。Day1：可启动、读取 `eval.target
 
 ## 运行
 
-需要 **JDK 21** 与 **Maven 3.9+**：
+需要 **JDK 21** 与 **Maven 3.9+**（或仓库根目录的 **Maven Wrapper**：`mvnw.cmd` / `mvnw`）。
 
 ```bash
 mvn spring-boot:run
 ```
 
+Windows 若无全局 `mvn`：先设置 `JAVA_HOME` 指向 JDK 21+，再执行 `.\mvnw.cmd spring-boot:run` 或 `.\mvnw.cmd test`。
+
 - 健康检查：`GET http://localhost:8099/actuator/health`
 - 进程与 target 配置摘要：`GET http://localhost:8099/internal/eval/status`（不含 token）
-- 指标（Prometheus scrape 入口，阶段二）：`GET http://localhost:8099/actuator/prometheus`
 
 配置见 `src/main/resources/application.yml`；生产示例见 `application-example.yml`（勿提交真实密钥）。
 
-## 阶段 1~3（已落地）概要
+## 阶段四：按 target 的调度队列（FIFO + 回压）
 
-- **阶段一：持久化（PostgreSQL）**：`eval_run` / `eval_result` 落库，重启不丢；支持 `DELETE /runs/{id}` 与自动 retention 清理（可配置）。
-- **阶段二：可观测（Micrometer）**：暴露 `/actuator/prometheus`，记录 run/case 计数与下游 HTTP 耗时；`RunRunner` 输出 key=value 结构化日志。
-- **阶段三：审计与合规**：`eval_audit_event` 落库；管理面成功/失败/安全拒绝均可追溯；debug 写库与出站均做脱敏+截断，且采用白名单策略。
-
-> 本地开发建议在 `application-local.yml` 配置 datasource/target/token 等；该文件已加入 `.gitignore`，请勿提交密码与明文 token。
-
-## 数据保留期与删除（P1）
-
-vagent-eval 的“评测证据”会落库（PostgreSQL 表 `eval_run` / `eval_result`），需要明确的删除策略：
-
-- **手动删除**：`DELETE /api/v1/eval/runs/{runId}`（results 级联删除）
-- **自动清理（retention）**：配置 `eval.retention.enabled/days/interval-ms` 后，定时删除 `FINISHED/CANCELLED` 且 `finished_at < now - days` 的 run
-
-## Debug 脱敏与白名单（阶段三）
-
-逐题结果会写入 `eval_result.debug_json`，并在 `GET /api/v1/eval/runs/{runId}/results` 返回 debug。
-为避免敏感信息落库或出站，服务端会做两层清洗（见 `com.vagent.eval.security.DebugSanitizer`）：
-
-- **敏感键永不保留明文**（如 `query`/`answer`/`token`）：替换为 `*_len` + `*_sha256`
-- **白名单优先**：仅允许的 key（或允许前缀 `membership_`）才会保留，其它默认丢弃（并记录 `debug_dropped_keys_count`）
-- **体量可控**：字符串/列表/key 数均有限制，避免 debug 过大拖慢 DB 与网络
+- **语义**：每个 `target_id` 一条 lane（`ArrayBlockingQueue` + worker）；`POST /api/v1/eval/runs` 创建 run 后入队异步执行，不再为每个 run `new Thread`。
+- **配置**（`eval.runner`）：
+  - `target-concurrency`：该 target 的 worker 数（默认 `1`，同 target 内顺序更稳定）
+  - `target-queue-capacity`：待调度 run 队列长度
+  - `enqueue-timeout-ms`：入队等待；队列满或超时则该 run 直接 `CANCELLED`，`cancel_reason` 形如 `schedule_rejected:QUEUE_FULL` / `schedule_rejected:ENQUEUE_TIMEOUT`
+- **可观测**：指标 `eval.runner.enqueue.rejected{target_id,reason}`；审计事件 `RUN_SCHEDULE_REJECT`（`actor=system`）
+- **单测**：`mvn test` 前需本机或 CI 上可连 PostgreSQL 库 `eval`（见 `src/test/resources/application.yml`；CI 已在 `.github/workflows/ci.yml` 中启动 `postgres:15` 服务）。在 JDK 25 等环境下 Mockito 默认 inline 可能受限，本仓库在 `src/test/resources/mockito-extensions/` 指定了 subclass mock maker。
 
 ## Day2 草案
 

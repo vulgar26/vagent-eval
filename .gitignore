@@ -47,3 +47,6 @@ eval_run_*results.json
 
 ### Local Spring profiles / secrets ###
 src/main/resources/application-local.yml
+
+### Local Maven / test log scratch ###
+mvn_test*.log

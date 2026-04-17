@@ -1,5 +1,13 @@
 # 测试默认打开评测管理 API，避免既有用例被 Day9 Filter 全部 404。
 # 专项安全用例见独立测试类上的 @TestPropertySource / @DynamicPropertySource。
+#
+# 阶段一+：主代码使用 JDBC + Flyway；集成测试需可连 PostgreSQL（与 CI services 或本地 Docker 一致）。
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/eval
+    username: postgres
+    password: postgres
+
 eval:
   api:
     enabled: true

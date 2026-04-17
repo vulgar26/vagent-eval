@@ -77,6 +77,17 @@ public class EvalMetrics {
         registry.counter("eval.runner.semaphore_timeout", "target_id", nz(targetId)).increment();
     }
 
+    /**
+     * 阶段四：调度层入队被拒绝（队列满或等待超时）。
+     */
+    public void runnerEnqueueRejected(String targetId, String reason) {
+        registry.counter(
+                "eval.runner.enqueue.rejected",
+                "target_id", nz(targetId),
+                "reason", nz(reason)
+        ).increment();
+    }
+
     private static String nz(String s) {
         return s == null ? "" : s;
     }

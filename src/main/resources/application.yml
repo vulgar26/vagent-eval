@@ -38,6 +38,14 @@ eval:
     - target-id: probe
       base-url: http://localhost:8099
       enabled: true
+  # 阶段四：按 target 的 lane 队列/worker 调度（FIFO + 回压）
+  runner:
+    # 当前实现：每个 target 1 lane worker 起步；后续可调大提升吞吐
+    target-concurrency: 1
+    # 每个 target 的 lane 队列容量（runId 数量）
+    target-queue-capacity: 50
+    # 入队等待时间；超时/队列满会拒绝调度并将 run 标为 CANCELLED
+    enqueue-timeout-ms: 250
 
 management:
   endpoints:

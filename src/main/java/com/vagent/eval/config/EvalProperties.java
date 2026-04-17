@@ -273,6 +273,30 @@ public class EvalProperties {
         private int acquireTimeoutMs = 250;
 
         /**
+         * 阶段四：每个 target 的 lane worker 数（当前实现默认 1）。
+         * <p>
+         * 说明：一个 lane 内的入队仍保持 FIFO，但 worker 数 > 1 会降低“严格 FIFO 完全顺序”的保证。
+         * 本阶段默认 1，以保证结果顺序更稳定，便于验收与排障。
+         */
+        @Min(1)
+        @Max(64)
+        private int targetConcurrency = 1;
+
+        /**
+         * 阶段四：每个 target 的 lane 队列容量（runId 数量）。
+         */
+        @Min(1)
+        @Max(10_000)
+        private int targetQueueCapacity = 50;
+
+        /**
+         * 阶段四：入队等待时间；超时则拒绝调度并将 run 标为 CANCELLED。
+         */
+        @Min(0)
+        @Max(60_000)
+        private int enqueueTimeoutMs = 250;
+
+        /**
          * 写入下游 eval/chat JSON body 的 {@code mode}（默认 {@code EVAL}）。
          * <p>
          * 仅用于联调/排障：可配置为 {@code EVAL_DEBUG} 以允许下游返回更强的 debug 字段（仍需下游自行遵守安全策略）。
@@ -293,6 +317,30 @@ public class EvalProperties {
 
         public void setAcquireTimeoutMs(int acquireTimeoutMs) {
             this.acquireTimeoutMs = acquireTimeoutMs;
+        }
+
+        public int getTargetConcurrency() {
+            return targetConcurrency;
+        }
+
+        public void setTargetConcurrency(int targetConcurrency) {
+            this.targetConcurrency = targetConcurrency;
+        }
+
+        public int getTargetQueueCapacity() {
+            return targetQueueCapacity;
+        }
+
+        public void setTargetQueueCapacity(int targetQueueCapacity) {
+            this.targetQueueCapacity = targetQueueCapacity;
+        }
+
+        public int getEnqueueTimeoutMs() {
+            return enqueueTimeoutMs;
+        }
+
+        public void setEnqueueTimeoutMs(int enqueueTimeoutMs) {
+            this.enqueueTimeoutMs = enqueueTimeoutMs;
         }
 
         public String getChatMode() {
