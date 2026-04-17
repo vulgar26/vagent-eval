@@ -69,6 +69,12 @@ public class EvalProperties {
     private Retention retention = new Retention();
 
     /**
+     * 阶段五：调度扩展（Redis 队列/配额等）。连接细节用 {@code spring.data.redis.*}；此处仅存业务语义字段。
+     */
+    @Valid
+    private Scheduler scheduler = new Scheduler();
+
+    /**
      * P0+：调用被测 {@code POST /api/v1/eval/chat} 时写入 {@code X-Eval-Token} 的默认明文；
      * per-target 见 {@link TargetConfig#getEvalToken()}。明文勿提交仓库，用环境变量或本地覆盖文件注入。
      */
@@ -112,6 +118,14 @@ public class EvalProperties {
 
     public void setRetention(Retention retention) {
         this.retention = retention == null ? new Retention() : retention;
+    }
+
+    public Scheduler getScheduler() {
+        return scheduler;
+    }
+
+    public void setScheduler(Scheduler scheduler) {
+        this.scheduler = scheduler == null ? new Scheduler() : scheduler;
     }
 
     public String getDefaultEvalToken() {
@@ -395,6 +409,79 @@ public class EvalProperties {
 
         public void setIntervalMs(long intervalMs) {
             this.intervalMs = intervalMs;
+        }
+    }
+
+    /**
+     * 阶段五：调度子配置树（YAML {@code eval.scheduler.*}）。
+     */
+    public static class Scheduler {
+
+        @Valid
+        private Redis redis = new Redis();
+
+        public Redis getRedis() {
+            return redis;
+        }
+
+        public void setRedis(Redis redis) {
+            this.redis = redis == null ? new Redis() : redis;
+        }
+
+        /**
+         * Redis 侧调度相关的<strong>业务字段</strong>；连接参数使用 Spring Boot 标准 {@code spring.data.redis.*}。
+         */
+        public static class Redis {
+
+            /**
+             * 是否启用「Redis 调度扩展」相关逻辑（阶段 5.1 仅做连通性校验；默认 false 保持现状）。
+             */
+            private boolean enabled = false;
+
+            /**
+             * 所有 eval 调度相关 Redis key 的统一前缀，用于与 vagent/travel 等业务 key 隔离。
+             * <p>
+             * 建议以 {@code :} 结尾，例如 {@code vagent:eval:}。
+             */
+            private String keyPrefix = "vagent:eval:";
+
+            /**
+             * Redis 不可连或 PING 失败时的策略。
+             */
+            private OnConnectFailure onConnectFailure = OnConnectFailure.LENIENT;
+
+            /**
+             * {@code LENIENT}：仅告警，不影响进程启动（默认，避免 Redis 抖动拖死评测服务）。<br>
+             * {@code STRICT}：启动失败，用于生产硬门禁。
+             */
+            public enum OnConnectFailure {
+                LENIENT,
+                STRICT
+            }
+
+            public boolean isEnabled() {
+                return enabled;
+            }
+
+            public void setEnabled(boolean enabled) {
+                this.enabled = enabled;
+            }
+
+            public String getKeyPrefix() {
+                return keyPrefix;
+            }
+
+            public void setKeyPrefix(String keyPrefix) {
+                this.keyPrefix = keyPrefix == null ? "" : keyPrefix.trim();
+            }
+
+            public OnConnectFailure getOnConnectFailure() {
+                return onConnectFailure;
+            }
+
+            public void setOnConnectFailure(OnConnectFailure onConnectFailure) {
+                this.onConnectFailure = onConnectFailure == null ? OnConnectFailure.LENIENT : onConnectFailure;
+            }
         }
     }
 }

@@ -14,3 +14,7 @@ eval:
     token-hash: ""
     allow-cidrs: []
     require-https: false
+  # 集成测试不依赖 Redis；阶段五 5.1 连通性默认关闭
+  scheduler:
+    redis:
+      enabled: false

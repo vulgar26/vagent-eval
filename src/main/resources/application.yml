@@ -10,6 +10,12 @@ spring:
     name: vagent-eval
   jackson:
     property-naming-strategy: SNAKE_CASE
+  # 阶段五：Redis 连接用标准键（勿在仓库提交明文密码；可用 SPRING_DATA_REDIS_* 环境变量注入）
+  # data:
+  #   redis:
+  #     host: localhost
+  #     port: 6379
+  #     password: ""
 
 # 对外 JSON / API 字段以 snake_case 为准；此处为服务配置，使用 kebab-case 与 SSOT 对齐。
 eval:
@@ -46,6 +52,13 @@ eval:
     target-queue-capacity: 50
     # 入队等待时间；超时/队列满会拒绝调度并将 run 标为 CANCELLED
     enqueue-timeout-ms: 250
+  # 阶段五 5.1：Redis 仅业务开关/前缀/失败策略；连接用 spring.data.redis.*
+  scheduler:
+    redis:
+      enabled: false
+      key-prefix: "vagent:eval:"
+      # lenient：连不上只告警；strict：启动失败（需同时配置 spring.data.redis.*）
+      on-connect-failure: lenient
 
 management:
   endpoints:

@@ -44,6 +44,11 @@ public class InternalEvalStatusController {
         body.put("token_hash_configured", api.getTokenHash() != null && !api.getTokenHash().isBlank());
         body.put("targets", summarizeTargets(evalProperties.getTargets()));
 
+        EvalProperties.Scheduler.Redis schedRedis = evalProperties.getScheduler().getRedis();
+        body.put("eval_scheduler_redis_enabled", schedRedis.isEnabled());
+        body.put("eval_scheduler_redis_key_prefix", schedRedis.getKeyPrefix());
+        body.put("eval_scheduler_redis_on_connect_failure", schedRedis.getOnConnectFailure().name());
+
         HealthComponent health = healthEndpoint.health();
         body.put("actuator_status", health.getStatus().getCode());
         return body;

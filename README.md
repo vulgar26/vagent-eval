@@ -27,6 +27,15 @@ Windows 若无全局 `mvn`：先设置 `JAVA_HOME` 指向 JDK 21+，再执行 `.
 - **可观测**：指标 `eval.runner.enqueue.rejected{target_id,reason}`；审计事件 `RUN_SCHEDULE_REJECT`（`actor=system`）
 - **单测**：`mvn test` 前需本机或 CI 上可连 PostgreSQL 库 `eval`（见 `src/test/resources/application.yml`；CI 已在 `.github/workflows/ci.yml` 中启动 `postgres:15` 服务）。在 JDK 25 等环境下 Mockito 默认 inline 可能受限，本仓库在 `src/test/resources/mockito-extensions/` 指定了 subclass mock maker。
 
+## 阶段五 5.1：Redis 接入（仅连通性，未切调度）
+
+- **连接**：使用 Spring Boot 标准 `spring.data.redis.*`（或 `SPRING_DATA_REDIS_*` 环境变量），由 `spring-boot-starter-data-redis` + Lettuce 自动装配 `RedisConnectionFactory`。
+- **业务配置**（`eval.scheduler.redis`，与连接分离）：
+  - `enabled`：为 `true` 时，启动阶段对 Redis 执行一次 `PING` 校验；默认 `false`，不影响现有内存 lane 调度。
+  - `key-prefix`：后续队列/配额 key 的统一前缀（**必须非空**，避免与 vagent/travel 等业务 key 冲突）；默认 `vagent:eval:`。
+  - `on-connect-failure`：`lenient`（仅告警）或 `strict`（启动失败）；未配置 `spring.data.redis.*` 导致无 `RedisConnectionFactory` 时同样按该策略处理。
+- **状态**：`GET /internal/eval/status` 会返回 `eval_scheduler_redis_*` 摘要字段（不含密钥）。
+
 ## Day2 草案
 
 Dataset 导入 API 与 JSONL/CSV 行格式见 [docs/day2-dataset-import-draft.md](docs/day2-dataset-import-draft.md)。
