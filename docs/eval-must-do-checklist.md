@@ -7,7 +7,7 @@
 ## 1. 分支与提交卫生（别人 / CI 能复现）
 
 - [x] **整理未提交改动**：dataset JDBC、`V4__eval_dataset_and_case.sql`、Redis 调度相关、安全/探针等，按主题拆成少量 commit（例如：迁移 + store；报告切片；Redis；安全与测试），避免单巨型 diff。  
-  *本次：拆为 `feat(report): run.report slices v2` 与 `feat: eval platform (dataset, redis, security, ci, docs)` 两个 commit。*
+  *本次：`feat(report): run.report slices v2` → `feat: eval platform (...)` → `docs: update must-do checklist (push completed)`。*
 - [x] **与远端对齐**：`main` 已 `git push origin main`（本环境已成功推送至 `origin`）。
 - [x] **确认 CI 配置**：workflow 使用仓库根路径、`mvn`、`scripts/*.sh`；`eval-demo-artifacts` 为 probe + admin API，无外部 target 依赖。
 
