@@ -40,7 +40,7 @@ class TargetRunSchedulerTest {
         ep.getRunner().setTargetQueueCapacity(1);
         ep.getRunner().setEnqueueTimeoutMs(0);
 
-        TargetRunScheduler scheduler = new TargetRunScheduler(runRunner, runStore, ep, metrics, audit);
+        TargetRunScheduler scheduler = new TargetRunScheduler(runRunner, runStore, ep, metrics, audit, null);
 
         CountDownLatch firstExecuteEntered = new CountDownLatch(1);
         CountDownLatch releaseFirst = new CountDownLatch(1);
@@ -96,7 +96,7 @@ class TargetRunSchedulerTest {
             return null;
         }).when(runRunner).execute(anyString());
 
-        TargetRunScheduler scheduler = new TargetRunScheduler(runRunner, runStore, ep, metrics, audit);
+        TargetRunScheduler scheduler = new TargetRunScheduler(runRunner, runStore, ep, metrics, audit, null);
 
         scheduler.enqueue("t2", "run_a");
         scheduler.enqueue("t2", "run_b");

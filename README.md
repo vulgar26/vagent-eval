@@ -17,6 +17,17 @@ Windows 若无全局 `mvn`：先设置 `JAVA_HOME` 指向 JDK 21+，再执行 `.
 
 配置见 `src/main/resources/application.yml`；生产示例见 `application-example.yml`（勿提交真实密钥）。
 
+## P0 联调状态（2026-04-18，摘要）
+
+- **已验证（本机 + 双 target）**：对 `plans/datasets/p0-dataset-v0.jsonl`（**32 case**，源文件在 **Vagent** 仓库 `D:\Projects\Vagent\plans\datasets\`）导入后，分别对 **`vagent`**、**`travel-ai`** 跑满 `FINISHED`，并生成 **`GET .../runs/{id}/report`**（`run.report.v1`）与 **`GET .../compare`**（`compare.v1`）。示例 `run_id` 与登记见 **`D:\Projects\Vagent\plans\regression-baseline-convention.md`** §4 / §4.1；总纲与缺口见 **`D:\Projects\Vagent\plans\eval-upgrade.md`**「vagent-eval 与双 target 联调状态」及该文档 **P0 退出标准** 下的验收快照。
+- **已实现（2026-04-18）**：`GET .../runs/{id}/report` 在 **本进程仍持有 dataset cases** 时附带 **`slices_version`**、**`by_expected_behavior`**、**`by_requires_citations`**（分母为该维度题数，与全卷 `pass_rate` 口径一致；`compare` 内嵌报告仍不含切片以免缺 dataset）。
+- **已实现（dataset 持久化）**：Flyway **`V4__eval_dataset_and_case.sql`** 建 `eval_dataset` / `eval_case`；运行时 **`JdbcDatasetStore`**（`DatasetStore` 接口）写入 PostgreSQL，**重启后同一 `dataset_id` 仍可 `GET .../datasets/{id}`、`list cases`、跑 run、`report` 切片**。`DELETE .../datasets/{id}` 会先删引用该库的 **`eval_run`**（级联删 `eval_result`），再删库与题。
+- **待补证据**：业务侧 **E4 限流** 与 eval 侧 **Redis 配额** 的完整 checklist 仍按 **`eval-upgrade.md`** P1/P0+ 验收。
+
+## 被测方集成（meta 落库 / compare / travel-ai 解耦）
+
+- **vagent / travel-ai 共用一份说明**：[docs/target-integration-meta-and-compare.md](docs/target-integration-meta-and-compare.md)（`meta` 落库、`meta-trace-keys`、探针行为与安全边界）
+
 ## 阶段四：按 target 的调度队列（FIFO + 回压）
 
 - **语义**：每个 `target_id` 一条 lane（`ArrayBlockingQueue` + worker）；`POST /api/v1/eval/runs` 创建 run 后入队异步执行，不再为每个 run `new Thread`。
@@ -27,14 +38,22 @@ Windows 若无全局 `mvn`：先设置 `JAVA_HOME` 指向 JDK 21+，再执行 `.
 - **可观测**：指标 `eval.runner.enqueue.rejected{target_id,reason}`；审计事件 `RUN_SCHEDULE_REJECT`（`actor=system`）
 - **单测**：`mvn test` 前需本机或 CI 上可连 PostgreSQL 库 `eval`（见 `src/test/resources/application.yml`；CI 已在 `.github/workflows/ci.yml` 中启动 `postgres:15` 服务）。在 JDK 25 等环境下 Mockito 默认 inline 可能受限，本仓库在 `src/test/resources/mockito-extensions/` 指定了 subclass mock maker。
 
-## 阶段五 5.1：Redis 接入（仅连通性，未切调度）
+## 阶段五 5.1：Redis 接入（连通性）
 
 - **连接**：使用 Spring Boot 标准 `spring.data.redis.*`（或 `SPRING_DATA_REDIS_*` 环境变量），由 `spring-boot-starter-data-redis` + Lettuce 自动装配 `RedisConnectionFactory`。
 - **业务配置**（`eval.scheduler.redis`，与连接分离）：
-  - `enabled`：为 `true` 时，启动阶段对 Redis 执行一次 `PING` 校验；默认 `false`，不影响现有内存 lane 调度。
-  - `key-prefix`：后续队列/配额 key 的统一前缀（**必须非空**，避免与 vagent/travel 等业务 key 冲突）；默认 `vagent:eval:`。
-  - `on-connect-failure`：`lenient`（仅告警）或 `strict`（启动失败）；未配置 `spring.data.redis.*` 导致无 `RedisConnectionFactory` 时同样按该策略处理。
+  - `enabled`：为 `true` 时，启动阶段对 Redis 执行一次 `PING` 校验；默认 `false`。
+  - `key-prefix`：调度相关 Redis key 的统一前缀（建议以 `:` 结尾）；默认 `vagent:eval:`。
+  - `on-connect-failure`：`lenient`（仅告警）或 `strict`（启动失败）。
 - **状态**：`GET /internal/eval/status` 会返回 `eval_scheduler_redis_*` 摘要字段（不含密钥）。
+
+## 阶段五 5.2：Redis 跨实例 run 队列
+
+- **何时启用**：`eval.scheduler.redis.enabled=true` **且** Spring 已装配 `StringRedisTemplate`（通常需同时配置 `spring.data.redis.*`）。此时 `POST /api/v1/eval/runs` 将 run 写入 Redis 列表（每 target 一条队列：`{keyPrefix}schedule:queue:{target_id}`），由本机及**其他实例**上的 worker 阻塞消费并执行 `RunRunner`。
+- **何时回退内存**：`enabled=false`，或 `enabled=true` 但无 `StringRedisTemplate`（会打 WARN 并回退到阶段四内存队列）。
+- **与 `eval.runner` 对齐**：`target-queue-capacity`（列表深度上限）、`target-concurrency`（每实例每 target 的 BLPOP worker 数）、`enqueue-timeout-ms`（队列满时等待入队）。
+- **多实例安全**：`RunStore.tryMarkStarted` 仅在 `PENDING` 时原子改为 `RUNNING`，避免同一 `run_id` 被重复执行。
+- **消费阻塞**：`eval.scheduler.redis.br-pop-timeout-seconds`（默认 `5`），超时后循环便于优雅停机。
 
 ## Day2 草案
 

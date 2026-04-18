@@ -75,6 +75,15 @@ public class RunStore {
                     debug = java.util.Map.of("debug_parse_error", e.getClass().getSimpleName());
                 }
             }
+            String metaJson = rs.getString("target_meta_json");
+            java.util.Map<String, Object> meta = null;
+            if (metaJson != null && !metaJson.isBlank()) {
+                try {
+                    meta = this.objectMapper.readValue(metaJson, MAP_TYPE);
+                } catch (Exception e) {
+                    meta = java.util.Map.of("meta_parse_error", e.getClass().getSimpleName());
+                }
+            }
             String ec = rs.getString("error_code");
             return new EvalResult(
                     rs.getString("run_id"),
@@ -85,6 +94,7 @@ public class RunStore {
                     ec == null ? null : RunModel.ErrorCode.valueOf(ec),
                     rs.getLong("latency_ms"),
                     readInstant(rs, "created_at"),
+                    meta,
                     debug
             );
         };
@@ -181,6 +191,22 @@ public class RunStore {
         }
     }
 
+    /**
+     * 仅在当前仍为 {@link RunStatus#PENDING} 时原子推进为 {@link RunStatus#RUNNING}；用于多实例/Redis 队列下防止同一 run 被重复执行。
+     *
+     * @return true 表示本调用赢得了启动权；false 表示 run 不存在或已不是 PENDING
+     */
+    public boolean tryMarkStarted(String runId) {
+        int n = jdbc.update(
+                "UPDATE eval_run SET status = ?, started_at = ? WHERE run_id = ? AND status = ?",
+                RunStatus.RUNNING.name(),
+                ts(Instant.now()),
+                runId,
+                RunStatus.PENDING.name()
+        );
+        return n == 1;
+    }
+
     public void markFinished(String runId) {
         int n = jdbc.update(
                 "UPDATE eval_run SET status = ?, finished_at = ? WHERE run_id = ?",
@@ -257,6 +283,16 @@ public class RunStore {
             }
         }
 
+        String metaJson = null;
+        Map<String, Object> metaRow = r.meta();
+        if (metaRow != null && !metaRow.isEmpty()) {
+            try {
+                metaJson = objectMapper.writeValueAsString(metaRow);
+            } catch (Exception e) {
+                metaJson = "{\"meta_serialize_error\":\"" + e.getClass().getSimpleName() + "\"}";
+            }
+        }
+
         try {
             // 关键点：completed_cases 只在“确实插入了一条新 result”时 +1。
             // 通过 CTE + ON CONFLICT DO NOTHING 达到“幂等写入”的效果，便于后续多实例/重试安全。
@@ -264,9 +300,9 @@ public class RunStore {
                             WITH ins AS (
                               INSERT INTO eval_result (
                                 run_id, case_id, dataset_id, target_id,
-                                verdict, error_code, latency_ms, created_at, debug_json
+                                verdict, error_code, latency_ms, created_at, debug_json, target_meta_json
                               )
-                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb))
+                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb), CAST(? AS jsonb))
                               ON CONFLICT (run_id, case_id) DO NOTHING
                               RETURNING 1
                             )
@@ -283,6 +319,7 @@ public class RunStore {
                     r.latencyMs(),
                     ts(r.createdAt()),
                     debugJson,
+                    metaJson,
                     r.runId()
             );
             if (updated != 1) {

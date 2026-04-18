@@ -7,6 +7,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
+import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -81,6 +82,9 @@ class Day6ProbeMembershipIntegrationTest {
                 .andExpect(jsonPath("$.results[0].verdict").value("PASS"))
                 .andExpect(jsonPath("$.results[0].error_code", nullValue()))
                 .andExpect(jsonPath("$.results[0].debug.membership_ok").value(true))
+                .andExpect(jsonPath("$.results[0].meta.hybrid_lexical_mode").value("tsvector"))
+                .andExpect(jsonPath("$.results[0].meta.retrieve_hit_count").value(greaterThan(0)))
+                .andExpect(jsonPath("$.results[0].meta.retrieve_top1_distance").value(0.05))
                 .andExpect(jsonPath("$.results[1].case_id").value("d6_fail"))
                 .andExpect(jsonPath("$.results[1].verdict").value("FAIL"))
                 .andExpect(jsonPath("$.results[1].error_code").value("SOURCE_NOT_IN_HITS"));

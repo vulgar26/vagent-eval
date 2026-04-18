@@ -7,7 +7,9 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * 绑定 {@code application.yml}（或环境变量）里以 {@code eval} 为根节点的配置。
@@ -26,6 +28,7 @@ import java.util.List;
  *       base-url: ...     → {@link TargetConfig#baseUrl}
  *       eval-token: ""    → {@link TargetConfig#getEvalToken}
  *       enabled: true     → {@link TargetConfig#enabled}
+ *       meta-trace-keys:  → {@link TargetConfig#getMetaTraceKeys}（compare / 探针按 target 选择 meta 子集）
  *   membership:            → {@link #membership}
  *     salt: ...           → {@link Membership#salt}
  *     top-n: 8           → {@link Membership#topN}
@@ -67,6 +70,12 @@ public class EvalProperties {
      */
     @Valid
     private Retention retention = new Retention();
+
+    /**
+     * 结果行扩展：上游 {@code meta} 落库策略（与 {@code eval.runner.*} 独立）。
+     */
+    @Valid
+    private Persistence persistence = new Persistence();
 
     /**
      * 阶段五：调度扩展（Redis 队列/配额等）。连接细节用 {@code spring.data.redis.*}；此处仅存业务语义字段。
@@ -120,6 +129,14 @@ public class EvalProperties {
         this.retention = retention == null ? new Retention() : retention;
     }
 
+    public Persistence getPersistence() {
+        return persistence;
+    }
+
+    public void setPersistence(Persistence persistence) {
+        this.persistence = persistence == null ? new Persistence() : persistence;
+    }
+
     public Scheduler getScheduler() {
         return scheduler;
     }
@@ -134,6 +151,23 @@ public class EvalProperties {
 
     public void setDefaultEvalToken(String defaultEvalToken) {
         this.defaultEvalToken = defaultEvalToken == null ? "" : defaultEvalToken;
+    }
+
+    /**
+     * 按 {@code eval.targets[].target-id} 解析「compare meta 摘要 / 探针可选 meta 字段」要关注的键名（snake_case，与上游 JSON 一致）。
+     * 未匹配到 target 或列表为空时返回空列表。
+     */
+    public List<String> resolveMetaTraceKeys(String targetId) {
+        if (targetId == null || targetId.isBlank()) {
+            return List.of();
+        }
+        String want = targetId.trim().toLowerCase(Locale.ROOT);
+        for (TargetConfig t : targets) {
+            if (t.getTargetId() != null && t.getTargetId().trim().toLowerCase(Locale.ROOT).equals(want)) {
+                return t.normalizedMetaTraceKeys();
+            }
+        }
+        return List.of();
     }
 
     public static class Api {
@@ -198,6 +232,12 @@ public class EvalProperties {
         /** 覆盖 {@link EvalProperties#defaultEvalToken}；仅当非空时使用。 */
         private String evalToken = "";
 
+        /**
+         * 从落库 {@code meta} 中按序拷贝到 compare 的 {@code *_meta_trace} 的键名；空表示不生成摘要（空 map）。
+         * 各被测方（vagent / travel-ai 等）观测字段不同，在此按 target 配置白名单，避免在代码里写死某一家的 schema。
+         */
+        private List<String> metaTraceKeys = new ArrayList<>();
+
         public String getTargetId() {
             return targetId;
         }
@@ -228,6 +268,30 @@ public class EvalProperties {
 
         public void setEvalToken(String evalToken) {
             this.evalToken = evalToken == null ? "" : evalToken;
+        }
+
+        public List<String> getMetaTraceKeys() {
+            return metaTraceKeys;
+        }
+
+        public void setMetaTraceKeys(List<String> metaTraceKeys) {
+            this.metaTraceKeys = metaTraceKeys == null ? new ArrayList<>() : metaTraceKeys;
+        }
+
+        /**
+         * 非空、trim 后的 meta 摘要键列表（不可变视图）。
+         */
+        public List<String> normalizedMetaTraceKeys() {
+            if (metaTraceKeys == null || metaTraceKeys.isEmpty()) {
+                return List.of();
+            }
+            List<String> out = new ArrayList<>();
+            for (String s : metaTraceKeys) {
+                if (s != null && !s.isBlank()) {
+                    out.add(s.trim());
+                }
+            }
+            return out.isEmpty() ? List.of() : Collections.unmodifiableList(out);
         }
     }
 
@@ -366,6 +430,41 @@ public class EvalProperties {
         }
     }
 
+    /**
+     * 上游 {@code meta} JSON 快照的持久化边界（YAML {@code eval.persistence.*}）。
+     */
+    public static class Persistence {
+
+        /**
+         * 默认 false：落库前移除 {@code meta.retrieval_hit_ids}（Vagent 仅在严格 DEBUG 边界下发明文）。
+         * 为 true 且 {@link Runner#getChatMode()} 为 {@code EVAL_DEBUG} 时保留该键（内网联调）。
+         */
+        private boolean allowPlainRetrievalHitIdsInMeta = false;
+
+        /**
+         * 单条 {@code target_meta_json} 序列化后的最大字符数；超出则整段 meta 不落库（返回 null）。
+         */
+        @Min(1024)
+        @Max(16_777_216)
+        private int maxTargetMetaJsonChars = 262_144;
+
+        public boolean isAllowPlainRetrievalHitIdsInMeta() {
+            return allowPlainRetrievalHitIdsInMeta;
+        }
+
+        public void setAllowPlainRetrievalHitIdsInMeta(boolean allowPlainRetrievalHitIdsInMeta) {
+            this.allowPlainRetrievalHitIdsInMeta = allowPlainRetrievalHitIdsInMeta;
+        }
+
+        public int getMaxTargetMetaJsonChars() {
+            return maxTargetMetaJsonChars;
+        }
+
+        public void setMaxTargetMetaJsonChars(int maxTargetMetaJsonChars) {
+            this.maxTargetMetaJsonChars = maxTargetMetaJsonChars;
+        }
+    }
+
     public static class Retention {
 
         /**
@@ -434,7 +533,8 @@ public class EvalProperties {
         public static class Redis {
 
             /**
-             * 是否启用「Redis 调度扩展」相关逻辑（阶段 5.1 仅做连通性校验；默认 false 保持现状）。
+             * 是否启用「Redis 调度扩展」：5.1 起含连通性校验；5.2 起在存在 {@code StringRedisTemplate} 时由
+             * {@link com.vagent.eval.scheduler.RedisRunQueueDispatcher} 接管跨进程 run 队列（默认 false）。
              */
             private boolean enabled = false;
 
@@ -451,12 +551,59 @@ public class EvalProperties {
             private OnConnectFailure onConnectFailure = OnConnectFailure.LENIENT;
 
             /**
+             * 阶段 5.2：消费者 {@code BLPOP} 阻塞超时（秒）；超时后循环重试，便于优雅停机与空转降 CPU。
+             */
+            @Min(1)
+            @Max(120)
+            private int brPopTimeoutSeconds = 5;
+
+            /**
+             * 5.3：集群范围内同一 target 最多同时执行多少个 run（所有 eval 实例合计）。
+             * {@code 0} 表示不启用全局配额（默认）。
+             */
+            @Min(0)
+            @Max(10_000)
+            private int globalMaxConcurrentRunsPerTarget = 0;
+
+            /**
+             * 5.3：从 Redis 队列取出 run 后，等待获得全局配额的最长时间（毫秒）；超时则拒跑（与入队拒绝路径一致）。
+             * 等待期间若配额已满会将 runId {@code LPUSH} 回队首并短睡后再次出队重试。
+             */
+            @Min(0)
+            @Max(600_000)
+            private int globalQuotaAcquireTimeoutMs = 30_000;
+
+            /**
              * {@code LENIENT}：仅告警，不影响进程启动（默认，避免 Redis 抖动拖死评测服务）。<br>
              * {@code STRICT}：启动失败，用于生产硬门禁。
              */
             public enum OnConnectFailure {
                 LENIENT,
                 STRICT
+            }
+
+            public int getBrPopTimeoutSeconds() {
+                return brPopTimeoutSeconds;
+            }
+
+            public void setBrPopTimeoutSeconds(int brPopTimeoutSeconds) {
+                this.brPopTimeoutSeconds = brPopTimeoutSeconds;
+            }
+
+            public int getGlobalMaxConcurrentRunsPerTarget() {
+                return globalMaxConcurrentRunsPerTarget;
+            }
+
+            public void setGlobalMaxConcurrentRunsPerTarget(int globalMaxConcurrentRunsPerTarget) {
+                this.globalMaxConcurrentRunsPerTarget = globalMaxConcurrentRunsPerTarget;
+            }
+
+            public int getGlobalQuotaAcquireTimeoutMs() {
+                return globalQuotaAcquireTimeoutMs;
+            }
+
+            public void setGlobalQuotaAcquireTimeoutMs(int globalQuotaAcquireTimeoutMs) {
+                this.globalQuotaAcquireTimeoutMs = globalQuotaAcquireTimeoutMs;
             }
 
             public boolean isEnabled() {

@@ -18,6 +18,7 @@ class EvalDebugExposureCheckerTest {
         EvalResult r = new EvalResult(
                 "run", "ds", "t", "c1", Verdict.FAIL, ErrorCode.UPSTREAM_UNAVAILABLE, 1L,
                 Instant.now(),
+                null,
                 Map.of("exception_message", "x")
         );
         Map<String, Object> body = Map.of("results", List.of(r));
@@ -30,8 +31,22 @@ class EvalDebugExposureCheckerTest {
         EvalResult r = new EvalResult(
                 "run", "ds", "t", "c1", Verdict.PASS, null, 1L,
                 Instant.now(),
+                null,
                 Map.of("verdict_reason", "ok")
         );
         assertThat(EvalDebugExposureChecker.violates(Map.of("results", List.of(r)), null)).isFalse();
+    }
+
+    @Test
+    void forbiddenWhenMetaContainsPlainRetrievalHitIdsWithoutDebugHeader() {
+        EvalResult r = new EvalResult(
+                "run", "ds", "t", "c1", Verdict.PASS, null, 1L,
+                Instant.now(),
+                Map.of("retrieval_hit_ids", java.util.List.of("chunk-a")),
+                Map.of("verdict_reason", "ok")
+        );
+        Map<String, Object> body = Map.of("results", List.of(r));
+        assertThat(EvalDebugExposureChecker.violates(body, null)).isTrue();
+        assertThat(EvalDebugExposureChecker.violates(body, "true")).isFalse();
     }
 }

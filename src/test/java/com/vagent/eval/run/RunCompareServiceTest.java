@@ -1,5 +1,6 @@
 package com.vagent.eval.run;
 
+import com.vagent.eval.config.EvalProperties;
 import com.vagent.eval.run.RunModel.ErrorCode;
 import com.vagent.eval.run.RunModel.EvalResult;
 import com.vagent.eval.run.RunModel.EvalRun;
@@ -8,6 +9,7 @@ import com.vagent.eval.run.RunModel.Verdict;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -32,7 +34,7 @@ class RunCompareServiceTest {
     }
 
     private static EvalResult row(String caseId, Verdict v, ErrorCode ec) {
-        return new EvalResult("run_x", "ds1", "probe", caseId, v, ec, 10L, Instant.now(), Map.of());
+        return new EvalResult("run_x", "ds1", "probe", caseId, v, ec, 10L, Instant.now(), null, Map.of());
     }
 
     @Test
@@ -83,5 +85,37 @@ class RunCompareServiceTest {
         assertThatThrownBy(() -> RunCompareService.compareRuns("b", "c", base, List.of(row("c1", Verdict.PASS, null)), cand, List.of(row("c1", Verdict.PASS, null))))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("same dataset_id");
+    }
+
+    @Test
+    void compareRuns_metaTraceCopiesOnlyConfiguredKeysForTarget() {
+        EvalProperties p = new EvalProperties();
+        EvalProperties.TargetConfig probeTarget = new EvalProperties.TargetConfig();
+        probeTarget.setTargetId("probe");
+        probeTarget.setMetaTraceKeys(List.of("retrieve_hit_count", "custom_travel_metric"));
+        p.setTargets(List.of(probeTarget));
+
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("retrieve_hit_count", 3);
+        meta.put("hybrid_lexical_mode", "bm25");
+        meta.put("custom_travel_metric", "ignored_in_probe_samples");
+
+        EvalResult br = new EvalResult(
+                "run_b", "ds1", "probe", "c1", Verdict.PASS, null, 10L, Instant.now(), meta, Map.of());
+        EvalResult cr = new EvalResult(
+                "run_c", "ds1", "probe", "c1", Verdict.FAIL, ErrorCode.TIMEOUT, 10L, Instant.now(), meta, Map.of());
+
+        EvalRun base = run("run_b", "ds1", 1, 1);
+        EvalRun cand = run("run_c", "ds1", 1, 1);
+        Map<String, Object> out = RunCompareService.compareRuns("run_b", "run_c", base, List.of(br), cand, List.of(cr), p);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> reg = (List<Map<String, Object>>) out.get("regressions");
+        assertThat(reg).hasSize(1);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> baseTrace = (Map<String, Object>) reg.get(0).get("base_meta_trace");
+        assertThat(baseTrace).containsOnlyKeys("retrieve_hit_count", "custom_travel_metric");
+        assertThat(baseTrace.get("retrieve_hit_count")).isEqualTo(3);
+        assertThat(baseTrace.get("custom_travel_metric")).isEqualTo("ignored_in_probe_samples");
     }
 }

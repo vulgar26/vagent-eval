@@ -28,12 +28,17 @@ public final class EvalDebugExposureChecker {
         Object results = map.get("results");
         if (results instanceof List<?> list) {
             for (Object o : list) {
-                if (o instanceof EvalResult er && debugHasForbiddenKeys(er.debug())) {
+                if (o instanceof EvalResult er && (debugHasForbiddenKeys(er.debug())
+                        || metaExposesPlainRetrievalHitIds(er.meta()))) {
                     return true;
                 }
             }
         }
         return false;
+    }
+
+    static boolean metaExposesPlainRetrievalHitIds(Map<String, Object> meta) {
+        return meta != null && meta.containsKey("retrieval_hit_ids");
     }
 
     static boolean evalDebugAllowed(String raw) {

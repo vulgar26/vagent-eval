@@ -21,10 +21,23 @@ eval:
       base-url: https://vagent.internal.example
       eval-token: ""
       enabled: true
+      # compare 的 *_meta_trace 及本地探针可注入的 meta 键；按被测方 schema 各自维护
+      meta-trace-keys:
+        - hybrid_lexical_mode
+        - hybrid_lexical_outcome
+        - retrieve_hit_count
+        - retrieve_top1_distance
+        - retrieve_top1_distance_bucket
     - target-id: travel-ai
       base-url: https://travel-ai.internal.example
       eval-token: ""
       enabled: false
+      meta-trace-keys: []
+
+  # 上游 meta 快照（eval_result.target_meta_json）；与 eval.runner.chat-mode 配合控制明文 hit id
+  persistence:
+    allow-plain-retrieval-hit-ids-in-meta: false
+    max-target-meta-json-chars: 262144
 
   # =========================
   # 数据保留期 / 删除策略（P1）
@@ -44,16 +57,22 @@ eval:
     interval-ms: 86400000
 
   # =========================
-  # 阶段五：Redis（调度队列/配额，5.1 先做连通性）
+  # 阶段五：Redis（5.1 连通性 + 5.2 跨实例 run 队列）
   # =========================
   #
   # 连接参数用 Spring Boot 标准 spring.data.redis.*（或 SPRING_DATA_REDIS_* 环境变量）。
-  # eval.scheduler.redis 仅存业务语义：是否启用、key 前缀、连接失败策略。
+  # eval.scheduler.redis：enabled、key 前缀、连接失败策略、BLPOP 超时等。
   scheduler:
     redis:
       enabled: false
       key-prefix: "vagent:eval:"
       on-connect-failure: lenient
+      # 5.2：BLPOP 阻塞超时（秒）
+      br-pop-timeout-seconds: 5
+      # 5.3：全集群同一 target 最多同时跑几个 run（需 Redis 调度队列）；0=不限制
+      global-max-concurrent-runs-per-target: 0
+      # 5.3：拿到 run 后等全局配额的最长时间（毫秒）
+      global-quota-acquire-timeout-ms: 30000
 
 # 与 eval.scheduler.redis 配套示例（启用时请取消注释并改为真实地址/凭据）
 # spring:

@@ -38,12 +38,63 @@ eval:
     - target-id: vagent
       base-url: http://localhost:8080
       enabled: true
+      # compare *_meta_trace 与探针可选字段：与 vagent EvalChatResponse.meta 观测键对齐；travel-ai 另配或留空
+      meta-trace-keys:
+        - hybrid_lexical_mode
+        - hybrid_lexical_outcome
+        - retrieve_hit_count
+        - retrieve_top1_distance
+        - retrieve_top1_distance_bucket
+        # 可选：距离分布与 hybrid / rerank 细化（有命中 / 有 hybrid 时才有部分键）
+        - retrieve_topk_distance_p50
+        - retrieve_topk_distance_p95
+        - retrieve_topk_distance_buckets
+        - hybrid_enabled
+        - hybrid_primary_chunk_id_count
+        - hybrid_lexical_chunk_id_count
+        - hybrid_fused_chunk_id_count
+        - hybrid_chunk_id_delta_rate
+        - rerank_enabled
+        - rerank_outcome
+        - rerank_latency_ms
+        # 可选：门控与候选口径（跨 run 对比行为时有用）
+        - low_confidence
+        - retrieval_candidate_total
+        - retrieval_candidate_limit_n
     - target-id: travel-ai
       base-url: http://localhost:8081
       enabled: true
+      meta-trace-keys:
+        # 流水线与 P0 约束
+        - mode
+        - stage_order
+        - step_count
+        - replan_count
+        # Plan 解析
+        - plan_parse_attempts
+        - plan_parse_outcome
+        # 检索与门控（RAG / 业务低置信）
+        - retrieve_hit_count
+        - low_confidence
+        - reasons
+        # SafetyGate 短路归因
+        - eval_safety_rule_id
+        # 工具治理（与 TOOL_GOVERNANCE_SPEC / stub 对齐）
+        - tool_calls_count
+        - tool_outcome
+        - tool_latency_ms
+        - tool_disabled_by_circuit_breaker
+        - tool_rate_limited
+        - tool_output_truncated
     - target-id: probe
       base-url: http://localhost:8099
       enabled: true
+      meta-trace-keys:
+        - hybrid_lexical_mode
+        - hybrid_lexical_outcome
+        - retrieve_hit_count
+        - retrieve_top1_distance
+        - retrieve_top1_distance_bucket
   # 阶段四：按 target 的 lane 队列/worker 调度（FIFO + 回压）
   runner:
     # 当前实现：每个 target 1 lane worker 起步；后续可调大提升吞吐
@@ -52,6 +103,10 @@ eval:
     target-queue-capacity: 50
     # 入队等待时间；超时/队列满会拒绝调度并将 run 标为 CANCELLED
     enqueue-timeout-ms: 250
+  # 上游 EvalChatResponse.meta 落库：默认不落明文 retrieval_hit_ids；超大小则跳过整段 meta
+  persistence:
+    allow-plain-retrieval-hit-ids-in-meta: false
+    max-target-meta-json-chars: 262144
   # 阶段五 5.1：Redis 仅业务开关/前缀/失败策略；连接用 spring.data.redis.*
   scheduler:
     redis:
@@ -59,6 +114,12 @@ eval:
       key-prefix: "vagent:eval:"
       # lenient：连不上只告警；strict：启动失败（需同时配置 spring.data.redis.*）
       on-connect-failure: lenient
+      # 5.2：Redis 队列消费者 BLPOP 超时（秒）
+      br-pop-timeout-seconds: 5
+      # 5.3：集群内每 target 同时 RUNNING 的 run 上限（0=关闭）；仅 Redis 调度队列生效时启用
+      global-max-concurrent-runs-per-target: 0
+      # 5.3：出队后等待全局配额的最长时间（毫秒）；满则 LPUSH 回队首重试，超时拒跑
+      global-quota-acquire-timeout-ms: 30000
 
 management:
   endpoints:

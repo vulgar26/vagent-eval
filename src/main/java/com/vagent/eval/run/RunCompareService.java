@@ -1,5 +1,6 @@
 package com.vagent.eval.run;
 
+import com.vagent.eval.config.EvalProperties;
 import com.vagent.eval.run.RunModel.EvalResult;
 import com.vagent.eval.run.RunModel.EvalRun;
 import com.vagent.eval.run.RunModel.Verdict;
@@ -28,10 +29,13 @@ import java.util.TreeSet;
  * <p>
  * <strong>判定（v1）</strong>：
  * <ul>
+ *   <li>{@code regressions}/{@code improvements} 的每行含 {@code base_meta_trace}/{@code cand_meta_trace}：按<strong>各题结果行</strong>
+ *       {@link EvalResult#targetId()} 匹配 {@code eval.targets[].meta-trace-keys}，从落库 {@code meta} 中拷贝对应键（无配置则为空 map），避免写死某一被测方 schema；</li>
  *   <li>{@code regressions}：base 为 {@link Verdict#PASS}，且 cand 侧<strong>有结果</strong>且 verdict 非 PASS；</li>
  *   <li>{@code improvements}：base 非 PASS，且 cand 侧有结果且为 PASS；</li>
  *   <li>{@code missing_in_cand}：base 有该 case，cand 无该 case 行——视为「未产出/未对齐」，单独列出便于排障（不混入 regression 以免与「判了但挂了」混淆）。</li>
  *   <li>{@code missing_in_base}：对称情况，仅 cand 有而 base 无（少见）。</li>
+ *   <li>{@code missing_in_*} 行含 {@code present_meta_trace}：仅存一侧结果时，按该行的 {@code target_id} 与 {@code meta-trace-keys} 从 {@code meta} 拷贝摘要。</li>
  * </ul>
  */
 @Service
@@ -43,9 +47,11 @@ public class RunCompareService {
     public static final String COMPARE_VERSION = "compare.v1";
 
     private final RunStore runStore;
+    private final EvalProperties evalProperties;
 
-    public RunCompareService(RunStore runStore) {
+    public RunCompareService(RunStore runStore, EvalProperties evalProperties) {
         this.runStore = runStore;
+        this.evalProperties = evalProperties;
     }
 
     /**
@@ -70,11 +76,13 @@ public class RunCompareService {
 
         List<EvalResult> baseResults = runStore.listAllResults(baseRunId);
         List<EvalResult> candResults = runStore.listAllResults(candRunId);
-        return compareRuns(baseRunId, candRunId, baseRun, baseResults, candRun, candResults);
+        return compareRuns(baseRunId, candRunId, baseRun, baseResults, candRun, candResults, evalProperties);
     }
 
     /**
      * 纯内存对比（单测直接调用）；校验 {@code dataset_id} 一致。
+     * <p>
+     * {@code evalProperties} 为 null 时不对 {@code meta} 做按 target 的摘要（{@code *_meta_trace} 均为空 map）。
      */
     public static Map<String, Object> compareRuns(
             String baseRunId,
@@ -83,6 +91,21 @@ public class RunCompareService {
             List<EvalResult> baseResults,
             EvalRun candRun,
             List<EvalResult> candResults
+    ) {
+        return compareRuns(baseRunId, candRunId, baseRun, baseResults, candRun, candResults, null);
+    }
+
+    /**
+     * @param evalProperties 用于解析各 target 的 {@code meta-trace-keys}；可为 null
+     */
+    public static Map<String, Object> compareRuns(
+            String baseRunId,
+            String candRunId,
+            EvalRun baseRun,
+            List<EvalResult> baseResults,
+            EvalRun candRun,
+            List<EvalResult> candResults,
+            EvalProperties evalProperties
     ) {
         if (!baseRun.datasetId().equals(candRun.datasetId())) {
             throw new IllegalArgumentException("base_run_id and cand_run_id must use the same dataset_id");
@@ -115,11 +138,11 @@ public class RunCompareService {
             EvalResult cr = candByCase.get(caseId);
 
             if (br != null && cr == null) {
-                missingInCand.add(missingEntry(caseId, baseRunId, candRunId, br, true));
+                missingInCand.add(missingEntry(caseId, baseRunId, candRunId, br, true, evalProperties));
                 continue;
             }
             if (br == null && cr != null) {
-                missingInBase.add(missingEntry(caseId, baseRunId, candRunId, cr, false));
+                missingInBase.add(missingEntry(caseId, baseRunId, candRunId, cr, false, evalProperties));
                 continue;
             }
             if (br == null) {
@@ -129,9 +152,9 @@ public class RunCompareService {
             Verdict bv = br.verdict();
             Verdict cv = cr.verdict();
             if (bv == Verdict.PASS && cv != Verdict.PASS) {
-                regressions.add(diffEntry(caseId, baseRunId, candRunId, br, cr));
+                regressions.add(diffEntry(caseId, baseRunId, candRunId, br, cr, evalProperties));
             } else if (bv != Verdict.PASS && cv == Verdict.PASS) {
-                improvements.add(diffEntry(caseId, baseRunId, candRunId, br, cr));
+                improvements.add(diffEntry(caseId, baseRunId, candRunId, br, cr, evalProperties));
             }
         }
 
@@ -163,7 +186,14 @@ public class RunCompareService {
     /**
      * 单题差分行：附带 cand/base 的 results 查询路径，便于 Apifox / 脚本直达 {@link RunApi#results}。
      */
-    private static Map<String, Object> diffEntry(String caseId, String baseRunId, String candRunId, EvalResult br, EvalResult cr) {
+    private static Map<String, Object> diffEntry(
+            String caseId,
+            String baseRunId,
+            String candRunId,
+            EvalResult br,
+            EvalResult cr,
+            EvalProperties evalProperties
+    ) {
         Map<String, Object> row = new LinkedHashMap<>();
         row.put("case_id", caseId);
         row.put("base_run_id", baseRunId);
@@ -172,15 +202,42 @@ public class RunCompareService {
         row.put("cand_verdict", cr.verdict().name());
         row.put("base_error_code", br.errorCode() == null ? null : br.errorCode().name());
         row.put("cand_error_code", cr.errorCode() == null ? null : cr.errorCode().name());
+        row.put("base_meta_trace", metaTracePreview(br, evalProperties));
+        row.put("cand_meta_trace", metaTracePreview(cr, evalProperties));
         row.put("cand_results_path", resultsPath(candRunId, caseId));
         row.put("base_results_path", resultsPath(baseRunId, caseId));
         return row;
     }
 
     /**
+     * 从单条结果的 {@code meta} 中按该题 {@link EvalResult#targetId()} 对应 target 的 {@code meta-trace-keys} 拷贝子集。
+     */
+    private static Map<String, Object> metaTracePreview(EvalResult r, EvalProperties evalProperties) {
+        Map<String, Object> meta = r.meta();
+        Map<String, Object> out = new LinkedHashMap<>();
+        if (meta == null || meta.isEmpty()) {
+            return out;
+        }
+        List<String> keys = evalProperties == null ? List.of() : evalProperties.resolveMetaTraceKeys(r.targetId());
+        for (String key : keys) {
+            if (key != null && meta.containsKey(key)) {
+                out.put(key, meta.get(key));
+            }
+        }
+        return out;
+    }
+
+    /**
      * cand 缺失时：仍给出 base  verdict 与两条查询路径（cand 侧通常为空列表，但路径统一便于工具复用）。
      */
-    private static Map<String, Object> missingEntry(String caseId, String baseRunId, String candRunId, EvalResult present, boolean missingOnCandSide) {
+    private static Map<String, Object> missingEntry(
+            String caseId,
+            String baseRunId,
+            String candRunId,
+            EvalResult present,
+            boolean missingOnCandSide,
+            EvalProperties evalProperties
+    ) {
         Map<String, Object> row = new LinkedHashMap<>();
         row.put("case_id", caseId);
         row.put("base_run_id", baseRunId);
@@ -194,6 +251,7 @@ public class RunCompareService {
             row.put("cand_verdict", present.verdict().name());
             row.put("note", "no EvalResult row for this case_id on base run");
         }
+        row.put("present_meta_trace", metaTracePreview(present, evalProperties));
         row.put("cand_results_path", resultsPath(candRunId, caseId));
         row.put("base_results_path", resultsPath(baseRunId, caseId));
         return row;

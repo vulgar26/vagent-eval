@@ -120,6 +120,7 @@ public class EvalProbeChatController {
             ok.put("retrieval_hits", hits);
             meta.put("retrieval_hit_id_hashes", buildHitIdHashes(token, tid, ds, cid, hits, hintedTopN));
             meta.put("canonical_hit_id_scheme", "lower_trim_v1");
+            ProbeMetaAugmentor.applyConfiguredTraceKeys(tid, meta, hits.size(), evalProperties);
         }
         ok.put("meta", meta);
         return ok;

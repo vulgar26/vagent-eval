@@ -3,6 +3,7 @@ package com.vagent.eval.web;
 import com.vagent.eval.audit.EvalAuditService;
 import com.vagent.eval.security.EvalApiSecurityFilter;
 import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -55,6 +56,20 @@ public class ApiExceptionHandler {
                 .body(Map.of("error", "BAD_REQUEST", "message", safeMsg(e)));
     }
 
+    /**
+     * JDBC/Flyway 问题（缺表、类型绑定等）在管理 API 上常表现为 500；返回根因摘要便于脚本与本地排障（不含 SQL 参数值）。
+     */
+    @ExceptionHandler(DataAccessException.class)
+    public ResponseEntity<Map<String, Object>> database(DataAccessException e, HttpServletRequest req) {
+        log.error("Database access error", e);
+        recordFailureAudit("DATABASE", e, req);
+        Throwable root = e.getMostSpecificCause() != null ? e.getMostSpecificCause() : e;
+        String msg = root.getMessage() == null ? "" : root.getMessage();
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("error", "DATABASE", "message", msg));
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String, Object>> internal(Exception e, HttpServletRequest req) {
         // Log stacktrace for on-call debugging; response remains stable JSON without leaking internals.
@@ -88,8 +103,8 @@ public class ApiExceptionHandler {
             detail.put("message", truncate(msg, 500));
         }
 
-        // 约定：BAD_REQUEST / NOT_FOUND 视为 REJECTED；INTERNAL 视为 ERROR。
-        String status = "INTERNAL".equals(error) ? "ERROR" : "REJECTED";
+        // 约定：BAD_REQUEST / NOT_FOUND 视为 REJECTED；INTERNAL / DATABASE 视为 ERROR。
+        String status = ("INTERNAL".equals(error) || "DATABASE".equals(error)) ? "ERROR" : "REJECTED";
 
         audit.record(
                 eventType,

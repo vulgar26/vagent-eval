@@ -86,7 +86,7 @@ public class DatasetApi {
     }
 
     /**
-     * P1：删除 dataset（合规/删除权）。管理面受 {@code EvalApiSecurityFilter} 保护。
+     * 删除 dataset 及其全部 case；并删除引用该 {@code dataset_id} 的 run（级联删 eval_result）。管理面受 {@code EvalApiSecurityFilter} 保护。
      */
     @DeleteMapping("/{datasetId}")
     public Map<String, Object> delete(@PathVariable String datasetId, HttpServletRequest httpReq) {

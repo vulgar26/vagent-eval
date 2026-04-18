@@ -17,7 +17,8 @@ import org.springframework.stereotype.Component;
  * 连接参数（host/port/password/SSL 等）统一走 Spring Boot 的 {@code spring.data.redis.*} 自动配置；
  * 本类只消费 {@link EvalProperties#getScheduler()} 里的<strong>业务语义字段</strong>（开关、key 前缀、失败策略）。
  * <p>
- * 本阶段<strong>不</strong>把 run 调度切到 Redis；仍由内存 {@link com.vagent.eval.run.TargetRunScheduler} 负责入队与执行。
+ * 阶段 5.2：当本开关为 true 且存在 {@link org.springframework.data.redis.core.StringRedisTemplate} 时，由 {@link RedisRunQueueDispatcher} 将 run 写入 Redis 列表并由 worker 消费；
+ * 否则仍由内存 {@link com.vagent.eval.run.TargetRunScheduler} 负责入队与执行（与 5.1 前一致）。
  */
 @Component
 @ConditionalOnProperty(prefix = "eval.scheduler.redis", name = "enabled", havingValue = "true")

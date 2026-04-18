@@ -75,6 +75,8 @@ public final class RunModel {
             ErrorCode errorCode,
             long latencyMs,
             Instant createdAt,
+            /** 上游 {@code EvalChatResponse.meta} 快照；可为 null（无 meta 或超大小未落库）。 */
+            Map<String, Object> meta,
             Map<String, Object> debug
     ) {
     }

@@ -1,9 +1,12 @@
 package com.vagent.eval.run;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.vagent.eval.config.EvalProperties;
 import com.vagent.eval.dataset.DatasetStore;
 import com.vagent.eval.dataset.Model.EvalCase;
 import com.vagent.eval.observability.EvalMetrics;
+import com.vagent.eval.security.MetaPersistSanitizer;
 import com.vagent.eval.run.RunModel.EvalResult;
 import com.vagent.eval.run.RunModel.EvalRun;
 import com.vagent.eval.run.RunModel.ErrorCode;
@@ -48,6 +51,7 @@ public class RunRunner {
     private final RunEvaluator evaluator;
     private final EvalProperties evalProperties;
     private final EvalMetrics evalMetrics;
+    private final ObjectMapper objectMapper;
 
     public RunRunner(
             DatasetStore datasetStore,
@@ -55,7 +59,8 @@ public class RunRunner {
             TargetClient targetClient,
             RunEvaluator evaluator,
             EvalProperties evalProperties,
-            EvalMetrics evalMetrics
+            EvalMetrics evalMetrics,
+            ObjectMapper objectMapper
     ) {
         this.datasetStore = datasetStore;
         this.runStore = runStore;
@@ -63,14 +68,15 @@ public class RunRunner {
         this.evaluator = evaluator;
         this.evalProperties = evalProperties;
         this.evalMetrics = evalMetrics;
+        this.objectMapper = objectMapper;
     }
 
     /**
-     * 阶段四：由 {@link TargetRunScheduler} 的 lane worker 调用执行。
+     * 阶段四：由 {@link TargetRunScheduler} 或 {@link com.vagent.eval.scheduler.RedisRunQueueDispatcher} 的 worker 调用执行。
      * <p>
      * 注意：这里<strong>不再</strong>自行创建线程；线程模型由调度器统一管理。
      */
-    void execute(String runId) {
+    public void execute(String runId) {
         try {
             EvalRun run = runStore.getRun(runId).orElseThrow(() -> new NoSuchElementException("run not found"));
 
@@ -87,7 +93,18 @@ public class RunRunner {
                 return;
             }
 
-            runStore.markStarted(runId);
+            // 多实例 + Redis 队列：仅允许一个 worker 将 PENDING → RUNNING，避免重复跑题写结果。
+            if (!runStore.tryMarkStarted(runId)) {
+                EvalRun now = runStore.getRun(runId).orElse(null);
+                log.info(
+                        "eval_event=run_execute_skip_not_pending run_id={} dataset_id={} target_id={} status={}",
+                        runId,
+                        run.datasetId(),
+                        run.targetId(),
+                        now == null ? "MISSING" : now.status().name()
+                );
+                return;
+            }
 
             // 阶段二：结构化日志（key=value），便于 grep/采集；不打印题干/答案全文
             log.info(
@@ -219,7 +236,7 @@ public class RunRunner {
                         : ErrorCode.UPSTREAM_UNAVAILABLE;
                 debug.put("http_status", tr.statusCode());
                 return new EvalResult(run.runId(), run.datasetId(), run.targetId(), c.caseId(), verdict,
-                        errorCode, latencyMs, now, debug);
+                        errorCode, latencyMs, now, null, debug);
             } else {
                 // Day4：2xx 但 body 非 JSON → PARSE_ERROR（与 CONTRACT_VIOLATION 区分）
                 if (tr.json() == null || tr.json().isNull()) {
@@ -227,14 +244,17 @@ public class RunRunner {
                     errorCode = ErrorCode.PARSE_ERROR;
                     debug.put("parse_error", "body_not_json");
                     return new EvalResult(run.runId(), run.datasetId(), run.targetId(), c.caseId(), verdict,
-                            errorCode, latencyMs, now, debug);
+                            errorCode, latencyMs, now, null, debug);
                 }
-                RunEvaluator.EvalOutcome o = evaluator.evaluate(c, tr.json(), run.targetId());
+                JsonNode root = tr.json();
+                Map<String, Object> metaSnap = MetaPersistSanitizer.sanitizeMetaForStorage(
+                        root.get("meta"), objectMapper, evalProperties);
+                RunEvaluator.EvalOutcome o = evaluator.evaluate(c, root, run.targetId());
                 verdict = o.verdict();
                 errorCode = o.errorCode() == null ? null : o.errorCode();
                 debug.putAll(o.debug());
                 return new EvalResult(run.runId(), run.datasetId(), run.targetId(), c.caseId(), verdict,
-                        errorCode == null ? null : errorCode, latencyMs, now, debug);
+                        errorCode == null ? null : errorCode, latencyMs, now, metaSnap, debug);
             }
         } catch (java.net.http.HttpTimeoutException e) {
             verdict = Verdict.FAIL;
@@ -260,6 +280,7 @@ public class RunRunner {
                 errorCode == null ? (verdict == Verdict.PASS ? null : ErrorCode.UNKNOWN) : errorCode,
                 latencyMs,
                 now,
+                null,
                 debug
         );
     }

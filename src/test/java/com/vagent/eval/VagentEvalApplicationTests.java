@@ -59,13 +59,33 @@ class VagentEvalApplicationTests {
                 .andExpect(jsonPath("$.eval_api_enabled").value(true))
                 .andExpect(jsonPath("$.targets[0].target_id").value("vagent"))
                 .andExpect(jsonPath("$.targets[0].enabled").value(true))
-                .andExpect(jsonPath("$.targets[0].base_url_origin").value("http://localhost:8080"));
+                .andExpect(jsonPath("$.targets[0].base_url_origin").value("http://localhost:8080"))
+                .andExpect(jsonPath("$.jdbc_url_masked").value("jdbc:postgresql://localhost:5432/eval"))
+                .andExpect(jsonPath("$.jdbc_username").value("postgres"));
     }
 
     /** 验证 {@link InternalEvalStatusController#safeOrigin} 会剥掉 path，只留 origin。 */
     @Test
     void safeOriginStripsPath() {
         assertThat(InternalEvalStatusController.safeOrigin("https://api.example.com:8443/v1")).isEqualTo("https://api.example.com:8443");
+    }
+
+    @Test
+    void maskJdbcUrlStripsUserinfoPassword() {
+        assertThat(InternalEvalStatusController.maskJdbcUrl("jdbc:postgresql://u:secret@localhost:5432/eval"))
+                .isEqualTo("jdbc:postgresql://u:***@localhost:5432/eval");
+    }
+
+    @Test
+    void maskJdbcUrlLeavesUrlWithoutEmbeddedPassword() {
+        assertThat(InternalEvalStatusController.maskJdbcUrl("jdbc:postgresql://localhost:5432/eval"))
+                .isEqualTo("jdbc:postgresql://localhost:5432/eval");
+    }
+
+    @Test
+    void maskJdbcUrlRedactsPasswordQueryParam() {
+        assertThat(InternalEvalStatusController.maskJdbcUrl("jdbc:postgresql://localhost/eval?password=secret&ssl=true"))
+                .isEqualTo("jdbc:postgresql://localhost/eval?password=***&ssl=true");
     }
 
     @Test

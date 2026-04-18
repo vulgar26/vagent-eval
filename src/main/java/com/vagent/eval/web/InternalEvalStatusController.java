@@ -3,6 +3,7 @@ package com.vagent.eval.web;
 import com.vagent.eval.config.EvalProperties;
 import org.springframework.boot.actuate.health.HealthComponent;
 import org.springframework.boot.actuate.health.HealthEndpoint;
+import org.springframework.core.env.Environment;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -17,7 +18,8 @@ import java.util.stream.Collectors;
 /**
  * 运维/排障用的「最小可读状态」：证明 eval 进程已启动，且 {@link EvalProperties} 里的 target 列表已加载。
  * <p>
- * 与 {@code /actuator/health} 分工：后者是 Spring 通用存活探针；本接口额外返回<strong>业务配置视角</strong>（eval_api、targets 摘要）。
+ * 与 {@code /actuator/health} 分工：后者是 Spring 通用存活探针；本接口额外返回<strong>业务配置视角</strong>（eval_api、targets 摘要、
+ * 已脱敏的 {@code spring.datasource.url} 与 username，便于核对与 DBeaver 是否同一实例）。
  * 生产环境应仅内网或管理员可达；Day9 起管理面见 {@code /api/v1/eval/**}（除 chat）的 Filter；本 {@code /internal/eval} 路径仍建议网络层收口。
  */
 @RestController
@@ -26,10 +28,13 @@ public class InternalEvalStatusController {
 
     private final EvalProperties evalProperties;
     private final HealthEndpoint healthEndpoint;
+    private final Environment environment;
 
-    public InternalEvalStatusController(EvalProperties evalProperties, HealthEndpoint healthEndpoint) {
+    public InternalEvalStatusController(
+            EvalProperties evalProperties, HealthEndpoint healthEndpoint, Environment environment) {
         this.evalProperties = evalProperties;
         this.healthEndpoint = healthEndpoint;
+        this.environment = environment;
     }
 
     /**
@@ -51,7 +56,37 @@ public class InternalEvalStatusController {
 
         HealthComponent health = healthEndpoint.health();
         body.put("actuator_status", health.getStatus().getCode());
+
+        // 排障：与 DBeaver / psql 对齐「应用实际连的库」；仓库主 application.yml 常不写 datasource，依赖环境变量或本地覆盖。
+        String jdbcUrl = environment.getProperty("spring.datasource.url");
+        body.put("jdbc_url_masked", maskJdbcUrl(jdbcUrl == null ? "" : jdbcUrl));
+        String jdbcUser = environment.getProperty("spring.datasource.username");
+        body.put("jdbc_username", jdbcUser == null ? "" : jdbcUser);
         return body;
+    }
+
+    /**
+     * 隐藏 JDBC URL 中 userinfo 的密码段（{@code user:password@host}）以及 query 中的 {@code password=} 值。
+     * <p>
+     * 用于 {@code /internal/eval/status}；不记录也不返回明文密码。
+     */
+    static String maskJdbcUrl(String url) {
+        if (url == null || url.isBlank()) {
+            return "";
+        }
+        String u = url.trim();
+        int schemeIdx = u.indexOf("://");
+        if (schemeIdx >= 0) {
+            int authStart = schemeIdx + 3;
+            int at = u.indexOf('@', authStart);
+            if (at > authStart) {
+                int colon = u.indexOf(':', authStart);
+                if (colon > authStart && colon < at) {
+                    u = u.substring(0, colon + 1) + "***" + u.substring(at);
+                }
+            }
+        }
+        return u.replaceAll("(?i)password=[^&]*", "password=***");
     }
 
     private static List<Map<String, Object>> summarizeTargets(List<EvalProperties.TargetConfig> targets) {

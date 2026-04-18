@@ -16,5 +16,8 @@ class EvalPropertiesSchedulerRedisTest {
         assertThat(p.getScheduler().getRedis().getKeyPrefix()).isEqualTo("vagent:eval:");
         assertThat(p.getScheduler().getRedis().getOnConnectFailure())
                 .isEqualTo(EvalProperties.Scheduler.Redis.OnConnectFailure.LENIENT);
+        assertThat(p.getScheduler().getRedis().getBrPopTimeoutSeconds()).isEqualTo(5);
+        assertThat(p.getScheduler().getRedis().getGlobalMaxConcurrentRunsPerTarget()).isZero();
+        assertThat(p.getScheduler().getRedis().getGlobalQuotaAcquireTimeoutMs()).isEqualTo(30_000);
     }
 }

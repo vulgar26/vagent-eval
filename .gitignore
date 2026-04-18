@@ -50,3 +50,9 @@ src/main/resources/application-local.yml
 
 ### Local Maven / test log scratch ###
 mvn_test*.log
+
+### Microsoft Office lock / autosave recovery (never commit) ###
+~$*
+~WRL*.tmp
+# Local scratch doc at repo root (do not add by mistake)
+命令行.docx

@@ -1,6 +1,7 @@
 package com.vagent.eval.run;
 
 import com.vagent.eval.dataset.DatasetStore;
+import com.vagent.eval.dataset.InMemoryDatasetStore;
 import com.vagent.eval.dataset.EvalExpectedBehavior;
 import com.vagent.eval.dataset.Model.EvalCase;
 import com.vagent.eval.dataset.Model.EvalDataset;
@@ -25,7 +26,7 @@ class RunBucketReportServiceTest {
 
     @Test
     void buckets_filterByTagPrefix_andUseBucketTotalAsRateDenominator() {
-        DatasetStore datasets = new DatasetStore();
+        DatasetStore datasets = new InMemoryDatasetStore();
         RunStore runs = Mockito.mock(RunStore.class);
         RunBucketReportService svc = new RunBucketReportService(datasets, runs);
 
@@ -55,10 +56,10 @@ class RunBucketReportServiceTest {
         );
 
         List<EvalResult> results = List.of(
-                new EvalResult(runId, datasetId, "probe", "a1", Verdict.PASS, null, 10, createdAt, Map.of()),
-                new EvalResult(runId, datasetId, "probe", "a2", Verdict.FAIL, ErrorCode.CONTRACT_VIOLATION, 11, createdAt, Map.of()),
-                new EvalResult(runId, datasetId, "probe", "r1", Verdict.PASS, null, 12, createdAt, Map.of()),
-                new EvalResult(runId, datasetId, "probe", "x1", Verdict.PASS, null, 13, createdAt, Map.of())
+                new EvalResult(runId, datasetId, "probe", "a1", Verdict.PASS, null, 10, createdAt, null, Map.of()),
+                new EvalResult(runId, datasetId, "probe", "a2", Verdict.FAIL, ErrorCode.CONTRACT_VIOLATION, 11, createdAt, null, Map.of()),
+                new EvalResult(runId, datasetId, "probe", "r1", Verdict.PASS, null, 12, createdAt, null, Map.of()),
+                new EvalResult(runId, datasetId, "probe", "x1", Verdict.PASS, null, 13, createdAt, null, Map.of())
         );
 
         Mockito.when(runs.getRun(runId)).thenReturn(java.util.Optional.of(run));
@@ -97,7 +98,7 @@ class RunBucketReportServiceTest {
 
     @Test
     void defaultPrefixes_returnThreeBuckets_evenIfEmpty() {
-        DatasetStore datasets = new DatasetStore();
+        DatasetStore datasets = new InMemoryDatasetStore();
         RunStore runs = Mockito.mock(RunStore.class);
         RunBucketReportService svc = new RunBucketReportService(datasets, runs);
 
@@ -123,7 +124,7 @@ class RunBucketReportServiceTest {
         );
 
         List<EvalResult> results = List.of(
-                new EvalResult(runId, datasetId, "probe", "c1", Verdict.PASS, null, 1, createdAt, Map.of())
+                new EvalResult(runId, datasetId, "probe", "c1", Verdict.PASS, null, 1, createdAt, null, Map.of())
         );
 
         Mockito.when(runs.getRun(runId)).thenReturn(java.util.Optional.of(run));
