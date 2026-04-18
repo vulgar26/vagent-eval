@@ -1,5 +1,7 @@
 package com.vagent.eval.run;
 
+import com.vagent.eval.dataset.EvalExpectedBehavior;
+import com.vagent.eval.dataset.Model.EvalCase;
 import com.vagent.eval.run.RunModel.ErrorCode;
 import com.vagent.eval.run.RunModel.EvalResult;
 import com.vagent.eval.run.RunModel.EvalRun;
@@ -34,7 +36,15 @@ class RunReportServiceTest {
     }
 
     private static EvalResult row(Verdict v, ErrorCode ec, long latencyMs) {
-        return new EvalResult("run_x", "ds", "probe", "c", v, ec, latencyMs, Instant.now(), Map.of());
+        return new EvalResult("run_x", "ds", "probe", "c", v, ec, latencyMs, Instant.now(), null, Map.of());
+    }
+
+    private static EvalResult rowCase(String caseId, Verdict v, ErrorCode ec, long latencyMs) {
+        return new EvalResult("run_x", "ds", "probe", caseId, v, ec, latencyMs, Instant.now(), null, Map.of());
+    }
+
+    private static EvalCase caseRow(String caseId, EvalExpectedBehavior eb, boolean reqCit) {
+        return new EvalCase(caseId, "ds", "q", eb, reqCit, List.of(), Instant.parse("2026-04-11T00:00:00Z"));
     }
 
     @Test
@@ -97,5 +107,67 @@ class RunReportServiceTest {
         assertThat(md).contains("run_ab");
         assertThat(md).contains("pass_rate:");
         assertThat(md).contains("p95_latency_ms:");
+    }
+
+    @Test
+    void slicesByExpectedBehaviorAndRequiresCitations_matchDatasetDenominators() {
+        List<EvalCase> cases = List.of(
+                caseRow("a1", EvalExpectedBehavior.ANSWER, false),
+                caseRow("a2", EvalExpectedBehavior.ANSWER, true),
+                caseRow("d1", EvalExpectedBehavior.DENY, false)
+        );
+        List<EvalResult> results = List.of(
+                rowCase("a1", Verdict.PASS, null, 10),
+                rowCase("a2", Verdict.SKIPPED_UNSUPPORTED, ErrorCode.SKIPPED_UNSUPPORTED, 5),
+                rowCase("d1", Verdict.FAIL, ErrorCode.BEHAVIOR_MISMATCH, 3)
+        );
+        Map<String, Object> rep = RunReportService.computeReport(run("run_slice", 3, 3), results, 5, cases);
+        assertThat(rep.get("slices_version")).isEqualTo(RunReportService.SLICES_VERSION);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> byEb = (List<Map<String, Object>>) rep.get("by_expected_behavior");
+        assertThat(byEb).hasSize(2);
+        Map<String, Object> answerRow = byEb.stream().filter(m -> "answer".equals(m.get("expected_behavior"))).findFirst().orElseThrow();
+        assertThat(answerRow.get("cases_total")).isEqualTo(2);
+        assertThat(answerRow.get("pass_count")).isEqualTo(1);
+        assertThat(answerRow.get("skipped_count")).isEqualTo(1);
+        assertThat(answerRow.get("pass_rate")).isEqualTo(0.5);
+        assertThat(answerRow.get("skipped_rate")).isEqualTo(0.5);
+        assertThat(answerRow.get("fail_rate")).isEqualTo(0.0);
+        assertThat(answerRow.get("latency_sample_count")).isEqualTo(2);
+        assertThat(answerRow.get("p95_method")).isEqualTo(RunReportService.P95_METHOD_NEAREST_RANK);
+        assertThat(answerRow.get("p95_latency_ms")).isEqualTo(10L);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> answerErr = (List<Map<String, Object>>) answerRow.get("error_code_counts");
+        assertThat(answerErr).hasSize(1);
+        assertThat(answerErr.get(0).get("error_code")).isEqualTo("SKIPPED_UNSUPPORTED");
+        assertThat(answerErr.get(0).get("count")).isEqualTo(1);
+
+        Map<String, Object> denyRow = byEb.stream().filter(m -> "deny".equals(m.get("expected_behavior"))).findFirst().orElseThrow();
+        assertThat(denyRow.get("p95_latency_ms")).isEqualTo(3L);
+        assertThat(denyRow.get("fail_rate")).isEqualTo(1.0);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> byRc = (List<Map<String, Object>>) rep.get("by_requires_citations");
+        assertThat(byRc).hasSize(2);
+        Map<String, Object> rcTrue = byRc.stream().filter(m -> Boolean.TRUE.equals(m.get("requires_citations"))).findFirst().orElseThrow();
+        assertThat(rcTrue.get("cases_total")).isEqualTo(1);
+        assertThat(rcTrue.get("skipped_count")).isEqualTo(1);
+        assertThat(rcTrue.get("pass_rate")).isEqualTo(0.0);
+    }
+
+    @Test
+    void markdownSummaryAppendsSliceSectionsWhenCasesProvided() {
+        List<EvalCase> cases = List.of(
+                caseRow("a1", EvalExpectedBehavior.ANSWER, false),
+                caseRow("d1", EvalExpectedBehavior.DENY, false)
+        );
+        List<EvalResult> results = List.of(
+                rowCase("a1", Verdict.PASS, null, 10),
+                rowCase("d1", Verdict.FAIL, ErrorCode.BEHAVIOR_MISMATCH, 3)
+        );
+        String md = (String) RunReportService.computeReport(run("run_md_slices", 2, 2), results, 5, cases).get("markdown_summary");
+        assertThat(md).contains("slices expected_behavior");
+        assertThat(md).contains("slices requires_citations");
+        assertThat(md).contains("expected_behavior=answer");
     }
 }
