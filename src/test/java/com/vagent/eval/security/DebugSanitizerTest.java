@@ -1,5 +1,6 @@
 package com.vagent.eval.security;
 
+import com.vagent.eval.run.RunEvaluator;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -12,7 +13,7 @@ class DebugSanitizerTest {
     @Test
     void sanitizeForStorage_removesSensitiveKeys() {
         Map<String, Object> in = Map.of(
-                "eval_rule_version", "p0.v4",
+                "eval_rule_version", RunEvaluator.EVAL_RULE_VERSION,
                 "query", "hello",
                 "answer", "world",
                 "exception_message", "boom",
@@ -20,7 +21,7 @@ class DebugSanitizerTest {
         );
 
         Map<String, Object> out = DebugSanitizer.sanitizeForStorage(in);
-        assertThat(out).containsEntry("eval_rule_version", "p0.v4");
+        assertThat(out).containsEntry("eval_rule_version", RunEvaluator.EVAL_RULE_VERSION);
 
         // 敏感明文不应出现
         assertThat(out).doesNotContainKeys("query", "answer");

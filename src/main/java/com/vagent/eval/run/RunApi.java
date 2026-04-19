@@ -165,7 +165,8 @@ public class RunApi {
 
     /**
      * Day7：{@code run.report} v1 —— pass_rate、skipped_rate、p95_latency_ms、error_code TopN 等；
-     * 若本进程仍持有该 run 的 dataset cases，另附 {@code slices_version}（当前为 v2）、{@code by_expected_behavior}、{@code by_requires_citations}，
+     * 若本进程仍持有该 run 的 dataset cases，另附 {@code slices_version}（当前为 v3）、{@code by_expected_behavior}、{@code by_requires_citations}、
+     * {@code by_expected_behavior_and_requires_citations}，
      * 每桶含 {@code p95_latency_ms}、{@code latency_sample_count}、{@code error_code_counts}、{@code fail_rate} 等；{@code markdown_summary} 追加切片段落。
      * <p>
      * {@code error_code_top_n} 缺省 5，超出 [1, 20] 时裁剪到区间内，

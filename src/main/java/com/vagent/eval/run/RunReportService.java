@@ -12,6 +12,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
@@ -26,7 +27,8 @@ import java.util.stream.Collectors;
  * <p>
  * <strong>报告版本</strong>：响应内 {@code report_version} 固定为 {@value #REPORT_VERSION}；v1 起在可提供 dataset case 定义时附加
  * {@code by_expected_behavior} / {@code by_requires_citations}（分母为该维度下的题数，与全卷 {@code pass_rate} 口径一致）。
- * {@value #SLICES_VERSION} 起每桶附带 {@code p95_latency_ms}、{@code error_code_counts} 等与全卷对齐的字段；{@code markdown_summary} 追加切片摘要。
+ * {@value #SLICES_VERSION} 起每桶附带 {@code p95_latency_ms}、{@code error_code_counts} 等与全卷对齐的字段；v3 起增加
+ * {@code by_expected_behavior_and_requires_citations}（交叉维度）；{@code markdown_summary} 追加切片摘要。
  */
 @Service
 public class RunReportService {
@@ -39,7 +41,7 @@ public class RunReportService {
     /**
      * 分片统计子结构版本（便于客户端判断解析器是否识别）。
      */
-    public static final String SLICES_VERSION = "run.report.slices.v2";
+    public static final String SLICES_VERSION = "run.report.slices.v3";
 
     /**
      * p95 算法标识，写入 JSON，避免读者猜测用的是哪种分位数定义。
@@ -107,7 +109,8 @@ public class RunReportService {
     }
 
     /**
-     * @param allCases 非 null 时生成 {@code by_expected_behavior} 与 {@code by_requires_citations}；为 null 时省略（如 compare 内嵌、或 dataset 已不在内存）
+     * @param allCases 非 null 时生成 {@code by_expected_behavior}、{@code by_requires_citations} 与
+     *                 {@code by_expected_behavior_and_requires_citations}；为 null 时省略（如 compare 内嵌、或 dataset 已不在内存）
      */
     public static Map<String, Object> computeReport(EvalRun run, List<EvalResult> results, int errorCodeTopN, List<EvalCase> allCases) {
         int totalCases = run.totalCases();
@@ -158,15 +161,18 @@ public class RunReportService {
         m.put("error_code_counts", errorTop);
         List<Map<String, Object>> byEb = null;
         List<Map<String, Object>> byRc = null;
+        List<Map<String, Object>> byCross = null;
         if (allCases != null && !allCases.isEmpty() && nResults > 0) {
             Map<String, EvalResult> byCaseId = indexResultsByCaseId(results);
             byEb = slicesByExpectedBehavior(allCases, byCaseId, topN);
             byRc = slicesByRequiresCitations(allCases, byCaseId, topN);
+            byCross = slicesByBehaviorAndCitations(allCases, byCaseId, topN);
             m.put("slices_version", SLICES_VERSION);
             m.put("by_expected_behavior", byEb);
             m.put("by_requires_citations", byRc);
+            m.put("by_expected_behavior_and_requires_citations", byCross);
         }
-        m.put("markdown_summary", buildMarkdownSummary(run.runId(), passRate, skippedRate, p95, errorTop, byEb, byRc));
+        m.put("markdown_summary", buildMarkdownSummary(run.runId(), passRate, skippedRate, p95, errorTop, byEb, byRc, byCross));
         return m;
     }
 
@@ -215,9 +221,70 @@ public class RunReportService {
         return out;
     }
 
+    /**
+     * 交叉桶：{@code expected_behavior} × {@code requires_citations}；仅输出数据集中实际存在的组合；顺序为
+     * answer/clarify/deny/tool（及余下行为按出现顺序追加）× false 先于 true。
+     */
+    static List<Map<String, Object>> slicesByBehaviorAndCitations(
+            List<EvalCase> cases,
+            Map<String, EvalResult> byCaseId,
+            int errorCodeTopN
+    ) {
+        LinkedHashSet<String> ebOrder = new LinkedHashSet<>();
+        ebOrder.addAll(List.of("answer", "clarify", "deny", "tool"));
+        for (EvalCase c : cases) {
+            ebOrder.add(c.expectedBehavior().toJson());
+        }
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (String eb : ebOrder) {
+            for (boolean rc : new boolean[]{false, true}) {
+                List<EvalCase> bucket = new ArrayList<>();
+                for (EvalCase c : cases) {
+                    if (eb.equals(c.expectedBehavior().toJson()) && c.requiresCitations() == rc) {
+                        bucket.add(c);
+                    }
+                }
+                if (!bucket.isEmpty()) {
+                    out.add(oneCrossSliceRow(eb, rc, bucket, byCaseId, errorCodeTopN));
+                }
+            }
+        }
+        return out;
+    }
+
     private static Map<String, Object> oneSliceRow(
             String dimensionKey,
             Object dimensionValue,
+            List<EvalCase> bucket,
+            Map<String, EvalResult> byCaseId,
+            int errorCodeTopN
+    ) {
+        Map<String, Object> row = new LinkedHashMap<>();
+        if (dimensionValue instanceof Boolean z) {
+            row.put(dimensionKey, z);
+        } else {
+            row.put(dimensionKey, Objects.toString(dimensionValue, ""));
+        }
+        fillSliceMetrics(row, bucket, byCaseId, errorCodeTopN);
+        return row;
+    }
+
+    private static Map<String, Object> oneCrossSliceRow(
+            String expectedBehavior,
+            boolean requiresCitations,
+            List<EvalCase> bucket,
+            Map<String, EvalResult> byCaseId,
+            int errorCodeTopN
+    ) {
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("expected_behavior", expectedBehavior);
+        row.put("requires_citations", requiresCitations);
+        fillSliceMetrics(row, bucket, byCaseId, errorCodeTopN);
+        return row;
+    }
+
+    private static void fillSliceMetrics(
+            Map<String, Object> row,
             List<EvalCase> bucket,
             Map<String, EvalResult> byCaseId,
             int errorCodeTopN
@@ -250,12 +317,6 @@ public class RunReportService {
         Double pr = denom > 0 ? pc / (double) denom : null;
         Double sr = denom > 0 ? sc / (double) denom : null;
         Double fr = denom > 0 ? fc / (double) denom : null;
-        Map<String, Object> row = new LinkedHashMap<>();
-        if (dimensionValue instanceof Boolean z) {
-            row.put(dimensionKey, z);
-        } else {
-            row.put(dimensionKey, Objects.toString(dimensionValue, ""));
-        }
         row.put("cases_total", denom);
         row.put("results_count", withResult);
         row.put("pass_count", pc);
@@ -270,7 +331,6 @@ public class RunReportService {
         row.put("p95_latency_ms", p95Slice);
         row.put("error_code_top_n", topN);
         row.put("error_code_counts", sliceErrors);
-        return row;
     }
 
     /**
@@ -325,7 +385,8 @@ public class RunReportService {
             Long p95,
             List<Map<String, Object>> errorTop,
             List<Map<String, Object>> byExpectedBehavior,
-            List<Map<String, Object>> byRequiresCitations
+            List<Map<String, Object>> byRequiresCitations,
+            List<Map<String, Object>> byBehaviorAndCitations
     ) {
         String pr = passRate == null ? "n/a" : String.format("%.4f", passRate);
         String sr = skippedRate == null ? "n/a" : String.format("%.4f", skippedRate);
@@ -380,6 +441,34 @@ public class RunReportService {
                 "- %s=%s pass_rate=%s skipped_rate=%s fail_rate=%s p95=%s err:%s%n",
                 dimKey,
                 dimVal,
+                slice.get("pass_rate") == null ? "n/a" : String.format("%.4f", slice.get("pass_rate")),
+                slice.get("skipped_rate") == null ? "n/a" : String.format("%.4f", slice.get("skipped_rate")),
+                slice.get("fail_rate") == null ? "n/a" : String.format("%.4f", slice.get("fail_rate")),
+                p95s,
+                err
+        );
+    }
+
+    private static String formatCrossSliceMarkdownLine(Map<String, Object> slice) {
+        Object eb = slice.get("expected_behavior");
+        Object rc = slice.get("requires_citations");
+        Object p95m = slice.get("p95_latency_ms");
+        String p95s = p95m == null ? "n/a" : p95m + " ms";
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> ec = (List<Map<String, Object>>) slice.get("error_code_counts");
+        StringBuilder err = new StringBuilder();
+        if (ec != null) {
+            for (Map<String, Object> row : ec) {
+                err.append(String.format(" %s x%s", row.get("error_code"), row.get("count")));
+            }
+        }
+        if (err.isEmpty()) {
+            err.append(" (no error_code rows)");
+        }
+        return String.format(
+                "- expected_behavior=%s requires_citations=%s pass_rate=%s skipped_rate=%s fail_rate=%s p95=%s err:%s%n",
+                eb,
+                rc,
                 slice.get("pass_rate") == null ? "n/a" : String.format("%.4f", slice.get("pass_rate")),
                 slice.get("skipped_rate") == null ? "n/a" : String.format("%.4f", slice.get("skipped_rate")),
                 slice.get("fail_rate") == null ? "n/a" : String.format("%.4f", slice.get("fail_rate")),

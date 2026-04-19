@@ -19,7 +19,8 @@ import java.util.stream.Collectors;
  * 运维/排障用的「最小可读状态」：证明 eval 进程已启动，且 {@link EvalProperties} 里的 target 列表已加载。
  * <p>
  * 与 {@code /actuator/health} 分工：后者是 Spring 通用存活探针；本接口额外返回<strong>业务配置视角</strong>（eval_api、targets 摘要、
- * 已脱敏的 {@code spring.datasource.url} 与 username，便于核对与 DBeaver 是否同一实例）。
+ * 已脱敏的 {@code spring.datasource.url} 与 username，便于核对与 DBeaver 是否同一实例；以及 {@code eval.runner.*} /
+ * Redis 调度摘要（含 {@code eval_scheduler_global_max_concurrent_runs_per_target}）便于对照 E4/配额验收清单）。
  * 生产环境应仅内网或管理员可达；Day9 起管理面见 {@code /api/v1/eval/**}（除 chat）的 Filter；本 {@code /internal/eval} 路径仍建议网络层收口。
  */
 @RestController
@@ -53,6 +54,14 @@ public class InternalEvalStatusController {
         body.put("eval_scheduler_redis_enabled", schedRedis.isEnabled());
         body.put("eval_scheduler_redis_key_prefix", schedRedis.getKeyPrefix());
         body.put("eval_scheduler_redis_on_connect_failure", schedRedis.getOnConnectFailure().name());
+        body.put("eval_scheduler_global_max_concurrent_runs_per_target", schedRedis.getGlobalMaxConcurrentRunsPerTarget());
+
+        EvalProperties.Runner runner = evalProperties.getRunner();
+        body.put("eval_runner_max_concurrency", runner.getMaxConcurrency());
+        body.put("eval_runner_acquire_timeout_ms", runner.getAcquireTimeoutMs());
+        body.put("eval_runner_target_concurrency", runner.getTargetConcurrency());
+        body.put("eval_runner_target_queue_capacity", runner.getTargetQueueCapacity());
+        body.put("eval_runner_enqueue_timeout_ms", runner.getEnqueueTimeoutMs());
 
         HealthComponent health = healthEndpoint.health();
         body.put("actuator_status", health.getStatus().getCode());

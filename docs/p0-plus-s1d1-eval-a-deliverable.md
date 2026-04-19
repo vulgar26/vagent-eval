@@ -103,7 +103,7 @@
 
 ## 附录：S1-D3（P0+ citations 口径收敛 + X-Eval-Token）已落地（Eval）
 
-- **`EVAL_RULE_VERSION`** 当前为 **`p0.v4`**：`requires_citations=true` 时，仅在 `expected_behavior=answer` 路径上强制非空 `sources` + Day6 membership；对 **`clarify` / `deny` 等非 answer** 行为，`citations_enforced=false`（`citations_enforced_reason=expected_behavior_not_answer`），避免因空检索/低置信场景逼迫编造引用。  
+- **`EVAL_RULE_VERSION`** 当前为 **`p0.v5`**：在 **`p0.v4`** 规则基础上，当 `requires_citations=true` 且 `expected_behavior=answer`、且 `meta.low_confidence=true` 时，要求非空 `meta.low_confidence_reasons`（string[]）；否则 `RETRIEVE_LOW_CONFIDENCE` / `CONTRACT_VIOLATION`。对 **`clarify` / `deny` 等非 answer** 行为，`citations_enforced=false`（`citations_enforced_reason=expected_behavior_not_answer`），避免因空检索/低置信场景逼迫编造引用。  
 - **配置**：`eval.default-eval-token`、`eval.targets[].eval-token` → `TargetClient` 填充 **`X-Eval-Token`**（与 membership 头独立）。  
 - 单测：`RunEvaluatorTest`（含 citations 相关场景）；`TargetClientEvalTokenTest`。
 

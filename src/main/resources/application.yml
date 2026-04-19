@@ -8,6 +8,9 @@ server:
 spring:
   application:
     name: vagent-eval
+  # 本机存在 src/main/resources/application-local.yml 时自动合并（文件在 .gitignore；CI 无该文件则跳过）
+  config:
+    import: optional:classpath:application-local.yml
   jackson:
     property-naming-strategy: SNAKE_CASE
   # 阶段五：Redis 连接用标准键（勿在仓库提交明文密码；可用 SPRING_DATA_REDIS_* 环境变量注入）

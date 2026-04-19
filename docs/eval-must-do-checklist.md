@@ -26,12 +26,12 @@
 
 **基线（`run.report.slices.v1`）**：按 `expected_behavior` / `requires_citations` 分桶，分母为该维度题数。
 
-**`run.report.slices.v2`（已实现）**：
+**`run.report.slices.v2` → `v3`（已实现）**：
 
 - [x] **每桶时延**：各切片 `latency_sample_count`、`p95_method`、`p95_latency_ms`（算法与全卷一致）。
 - [x] **每桶错误码**：各切片 `error_code_top_n`（与请求参数一致）、`error_code_counts`。
-- [x] **`markdown_summary`**：追加 `## slices expected_behavior` / `## slices requires_citations` ASCII 行。
-- [ ] **（可选）交叉维度**：`expected_behavior` × `requires_citations` 矩阵 — 未做，避免报表膨胀；需要时再开版本。
+- [x] **`markdown_summary`**：追加 `## slices expected_behavior` / `## slices requires_citations` / **`## slices expected_behavior x requires_citations`** ASCII 行。
+- [x] **交叉维度**：字段 **`by_expected_behavior_and_requires_citations`**（仅输出数据集中实际存在的 `(behavior, requires_citations)` 组合；当前 **`slices_version`** 为 **`run.report.slices.v3`**）。
 
 实现说明：`RunCompareService` 等仍调用 `computeReport(..., null)` 时不带切片；客户端以 `slices_version` 区分字段集。
 
@@ -40,6 +40,16 @@
 ## 4. 排障约定（已具备能力）
 
 - 数据源不一致时：查看 `GET /internal/eval/status` 中的 `jdbc_url_masked`、`jdbc_username`，与 DBeaver 连接对齐；GUI 查看表数据后记得 **刷新**。
+- 限流 / 队列 / Redis 配额：同接口查看 **`eval_runner_*`**、**`eval_scheduler_global_max_concurrent_runs_per_target`** 等（与 [eval-e4-redis-quota-checklist.md](eval-e4-redis-quota-checklist.md) 对照）。
+
+---
+
+## 5. 后续迭代（非阻塞）
+
+- [x] **`meta.low_confidence` / `low_confidence_reasons`（p0.v5）**：已在 `RunEvaluator` 对 answer+citations 路径生效；`debug.eval_rule_version` 为 **`p0.v5`**。
+- [x] **交叉维度报表**：见 §3，`by_expected_behavior_and_requires_citations`（**`slices.v3`**）。
+- [x] **`meta.disabled_reason`（可观测性）**：在因 **`capabilities`** 不支持而 **`SKIPPED_UNSUPPORTED`**（检索/工具）时，若 `meta.disabled_reason` 为非空字符串，写入 **`debug.meta_disabled_reason`**。
+- [ ] **E4 / Redis 配额验收证据**：按 **[eval-e4-redis-quota-checklist.md](eval-e4-redis-quota-checklist.md)** 逐项勾选（与 `eval-upgrade.md` 对齐）。
 
 ---
 

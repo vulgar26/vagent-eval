@@ -147,6 +147,12 @@ class RunReportServiceTest {
         assertThat(denyRow.get("fail_rate")).isEqualTo(1.0);
 
         @SuppressWarnings("unchecked")
+        List<Map<String, Object>> cross = (List<Map<String, Object>>) rep.get("by_expected_behavior_and_requires_citations");
+        assertThat(cross).hasSize(3);
+        assertThat(cross.stream().anyMatch(m -> "answer".equals(m.get("expected_behavior"))
+                && Boolean.FALSE.equals(m.get("requires_citations")))).isTrue();
+
+        @SuppressWarnings("unchecked")
         List<Map<String, Object>> byRc = (List<Map<String, Object>>) rep.get("by_requires_citations");
         assertThat(byRc).hasSize(2);
         Map<String, Object> rcTrue = byRc.stream().filter(m -> Boolean.TRUE.equals(m.get("requires_citations"))).findFirst().orElseThrow();
@@ -168,6 +174,7 @@ class RunReportServiceTest {
         String md = (String) RunReportService.computeReport(run("run_md_slices", 2, 2), results, 5, cases).get("markdown_summary");
         assertThat(md).contains("slices expected_behavior");
         assertThat(md).contains("slices requires_citations");
+        assertThat(md).contains("slices expected_behavior x requires_citations");
         assertThat(md).contains("expected_behavior=answer");
     }
 }

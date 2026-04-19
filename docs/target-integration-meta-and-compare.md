@@ -14,6 +14,11 @@
 | **明文 `retrieval_hit_ids`** | 落库前默认 **删除** `meta.retrieval_hit_ids`；仅当 `eval.persistence.allow-plain-retrieval-hit-ids-in-meta=true` **且** `eval.runner.chat-mode=EVAL_DEBUG` 时可能保留（内网联调）。出站：未带 `X-Eval-Debug` 的管理 API 响应中仍会去掉该键。请与贵方 **EVAL_DEBUG + allow-cidrs** 等产品策略对齐。 |
 | **超大 `meta`** | `eval.persistence.max-target-meta-json-chars`（默认约 256Ki 字符的 JSON 串长）超限则 **整段 `meta` 不落库**（该条 `meta` 为空）。 |
 
+### 1.1 与判定器相关的 `meta` 键（`RunEvaluator`）
+
+- **`meta.low_confidence` / `meta.low_confidence_reasons`**：当题面 **`requires_citations=true`** 且期望 **`answer`** 时，若 **`meta.low_confidence=true`**，则 **`meta.low_confidence_reasons`** 须为**非空** `string[]`（**p0.v5**）；否则结果记 **`RETRIEVE_LOW_CONFIDENCE`** 或 **`CONTRACT_VIOLATION`**。
+- **`meta.disabled_reason`**：可选字符串。若因 **`capabilities`** 声明**不支持检索/工具**而得到 **`SKIPPED_UNSUPPORTED`**，eval 会将非空的 **`disabled_reason`** 写入结果 **`debug.meta_disabled_reason`**，便于与下游「能力降级」叙事对齐。
+
 ---
 
 ## 2. 对 vagent 方的约定（与既有 SSOT 对齐）

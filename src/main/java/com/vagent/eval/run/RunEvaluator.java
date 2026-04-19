@@ -29,6 +29,11 @@ import java.util.Set;
  *       <strong>P0+ §16.7</strong>：期望与实际均为 {@code deny} 且检索 0 命中信号时允许空 {@code sources}；</li>
  *   <li><strong>P0+</strong>：在 citations（answer）路径上优先使用 {@code meta.retrieval_hit_id_hashes}（前 N 条）做 HMAC membership；
  *       在 {@code meta.mode=EVAL_DEBUG} 且缺 hashes 时，允许回退到 {@code meta.retrieval_hit_ids[]} 明文候选集做包含判定（见 eval-upgrade.md）。</li>
+ *   <li><strong>p0.v5</strong>：{@code requires_citations=true} 且期望 {@code answer} 时，若 {@code meta.low_confidence=true}，
+ *       则 {@code meta.low_confidence_reasons} 须为非空 {@code string[]}（与 meta-trace-keys 观测口径对齐）；否则
+ *       {@link ErrorCode#RETRIEVE_LOW_CONFIDENCE} 或 {@link ErrorCode#CONTRACT_VIOLATION}；</li>
+ *   <li>若因 {@code capabilities} 不支持而 {@link Verdict#SKIPPED_UNSUPPORTED}（检索/工具），且 {@code meta.disabled_reason}
+ *       为非空字符串，则写入 {@code debug.meta_disabled_reason} 便于与下游降级叙事对齐。</li>
  *   <li>最后处理 {@code expected_behavior=tool} 且工具已声明支持时的 {@code tool} 块细节。</li>
  * </ol>
  * <p>
@@ -38,11 +43,12 @@ import java.util.Set;
 public class RunEvaluator {
 
     /**
-     * P0 判定器版本号：Day6 引入 hashed membership；P0+ §16.7（deny+空检索豁免空 {@code sources}）起为 {@code p0.v3}。
+     * P0 判定器版本号：Day6 引入 hashed membership；P0+ §16.7（deny+空检索豁免空 {@code sources}）；p0.v5 起
+     * 在 answer+citations 路径校验 {@code meta.low_confidence_reasons}。
      * <p>
      * 出现在每条结果的 {@code debug.eval_rule_version}，便于报告追溯；规则语义变更后必须递增且勿与旧 run 混比。
      */
-    public static final String EVAL_RULE_VERSION = "p0.v4";
+    public static final String EVAL_RULE_VERSION = "p0.v5";
 
     private final EvalChatContractValidator contractValidator;
     private final EvalProperties evalProperties;
@@ -120,6 +126,7 @@ public class RunEvaluator {
         // 期望 tool 但上游声明不支持工具时，与 citations+retrieval 同理：无法评测 → 跳过，不因 behavior=answer 判 mismatch。
         if ("tool".equalsIgnoreCase(expectedBehavior) && !toolsSupported) {
             debug.put("verdict_reason", "tools_unsupported");
+            putDisabledReasonIfPresent(meta, debug);
             return new EvalOutcome(Verdict.SKIPPED_UNSUPPORTED, ErrorCode.SKIPPED_UNSUPPORTED, debug);
         }
 
@@ -131,6 +138,7 @@ public class RunEvaluator {
         if (c.requiresCitations()) {
             if (!retrievalSupported) {
                 debug.put("verdict_reason", "retrieval_unsupported");
+                putDisabledReasonIfPresent(meta, debug);
                 return new EvalOutcome(Verdict.SKIPPED_UNSUPPORTED, ErrorCode.SKIPPED_UNSUPPORTED, debug);
             }
             // P0+：requires_citations 约束仅对「会输出可核验主张」的 answer 路径生效。
@@ -139,17 +147,20 @@ public class RunEvaluator {
                 debug.put("citations_enforced", false);
                 debug.put("citations_enforced_reason", "expected_behavior_not_answer");
             } else {
-            boolean sourcesEmpty = sources == null || !sources.isArray() || sources.size() < 1;
-            if (sourcesEmpty) {
+                EvalOutcome lowConfOutcome = validateLowConfidenceReasons(meta, debug);
+                if (lowConfOutcome != null) {
+                    return lowConfOutcome;
+                }
+                boolean sourcesEmpty = sources == null || !sources.isArray() || sources.size() < 1;
+                if (sourcesEmpty) {
                     debug.put("verdict_reason", "missing_sources");
                     return new EvalOutcome(Verdict.FAIL, ErrorCode.CONTRACT_VIOLATION, debug);
-            } else {
+                }
                 // P0+：引用必须落在检索候选（前 N 条）的 hashed 集合内（基于 X-Eval-Token 派生 per-case key）。
                 EvalOutcome membershipOutcome = verifyCitationMembership(respJson, sources, targetId, c.datasetId(), c.caseId(), debug);
                 if (membershipOutcome != null) {
                     return membershipOutcome;
                 }
-            }
             }
         }
 
@@ -173,6 +184,64 @@ public class RunEvaluator {
 
         debug.put("verdict_reason", "ok");
         return new EvalOutcome(Verdict.PASS, null, debug);
+    }
+
+    /**
+     * p0.v5：在 {@code requires_citations=true} 且期望 {@code answer}、且已声明 {@code retrieval_supported} 时，
+     * 若 {@code meta.low_confidence=true}，则 {@code meta.low_confidence_reasons} 须为非空 string 数组。
+     *
+     * @return null 表示无需拦截；非 null 为终态
+     */
+    private static void putDisabledReasonIfPresent(JsonNode meta, Map<String, Object> debug) {
+        if (meta == null || meta.isNull()) {
+            return;
+        }
+        JsonNode dr = meta.get("disabled_reason");
+        if (dr != null && dr.isTextual()) {
+            String t = dr.asText().trim();
+            if (!t.isEmpty()) {
+                debug.put("meta_disabled_reason", t);
+            }
+        }
+    }
+
+    private static EvalOutcome validateLowConfidenceReasons(JsonNode meta, Map<String, Object> debug) {
+        if (meta == null || meta.isNull()) {
+            return null;
+        }
+        JsonNode flag = meta.get("low_confidence");
+        if (flag == null || flag.isNull()) {
+            return null;
+        }
+        if (!flag.isBoolean()) {
+            debug.put("verdict_reason", "meta_low_confidence_must_be_boolean");
+            return new EvalOutcome(Verdict.FAIL, ErrorCode.CONTRACT_VIOLATION, debug);
+        }
+        if (!flag.asBoolean()) {
+            return null;
+        }
+        JsonNode reasons = meta.get("low_confidence_reasons");
+        if (reasons == null || reasons.isNull()) {
+            debug.put("verdict_reason", "low_confidence_reasons_missing");
+            return new EvalOutcome(Verdict.FAIL, ErrorCode.RETRIEVE_LOW_CONFIDENCE, debug);
+        }
+        if (!reasons.isArray()) {
+            debug.put("verdict_reason", "low_confidence_reasons_not_array");
+            return new EvalOutcome(Verdict.FAIL, ErrorCode.CONTRACT_VIOLATION, debug);
+        }
+        if (reasons.size() == 0) {
+            debug.put("verdict_reason", "low_confidence_reasons_empty");
+            return new EvalOutcome(Verdict.FAIL, ErrorCode.RETRIEVE_LOW_CONFIDENCE, debug);
+        }
+        for (int i = 0; i < reasons.size(); i++) {
+            JsonNode r = reasons.get(i);
+            if (r == null || !r.isTextual() || r.asText().trim().isEmpty()) {
+                debug.put("verdict_reason", "low_confidence_reasons_item_invalid");
+                debug.put("low_confidence_reason_index", i);
+                return new EvalOutcome(Verdict.FAIL, ErrorCode.CONTRACT_VIOLATION, debug);
+            }
+        }
+        return null;
     }
 
     /**

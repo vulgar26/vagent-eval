@@ -12,6 +12,8 @@ mvn spring-boot:run
 
 Windows 若无全局 `mvn`：先设置 `JAVA_HOME` 指向 JDK 21+，再执行 `.\mvnw.cmd spring-boot:run` 或 `.\mvnw.cmd test`。
 
+本机覆盖配置：在 `src/main/resources/application-local.yml` 写 token、网关等（已在 `.gitignore`）。`application.yml` 已配置 **`spring.config.import: optional:classpath:application-local.yml`**，有该文件时会自动合并，**不必**再设 `SPRING_PROFILES_ACTIVE=local`（仍可用 profile 做其他环境区分）。
+
 - 健康检查：`GET http://localhost:8099/actuator/health`
 - 进程与 target 配置摘要：`GET http://localhost:8099/internal/eval/status`（不含 token）
 
@@ -22,9 +24,10 @@ Windows 若无全局 `mvn`：先设置 `JAVA_HOME` 指向 JDK 21+，再执行 `.
 ## P0 联调状态（2026-04-18，摘要）
 
 - **已验证（本机 + 双 target）**：对 `plans/datasets/p0-dataset-v0.jsonl`（**32 case**，源文件在 **Vagent** 仓库 `D:\Projects\Vagent\plans\datasets\`）导入后，分别对 **`vagent`**、**`travel-ai`** 跑满 `FINISHED`，并生成 **`GET .../runs/{id}/report`**（`run.report.v1`）与 **`GET .../compare`**（`compare.v1`）。示例 `run_id` 与登记见 **`D:\Projects\Vagent\plans\regression-baseline-convention.md`** §4 / §4.1；总纲与缺口见 **`D:\Projects\Vagent\plans\eval-upgrade.md`**「vagent-eval 与双 target 联调状态」及该文档 **P0 退出标准** 下的验收快照。
-- **已实现（2026-04-18）**：`GET .../runs/{id}/report` 在 **本进程仍持有 dataset cases** 时附带 **`slices_version`**、**`by_expected_behavior`**、**`by_requires_citations`**（分母为该维度题数，与全卷 `pass_rate` 口径一致；`compare` 内嵌报告仍不含切片以免缺 dataset）。
+- **已实现（2026-04-18）**：`GET .../runs/{id}/report` 在 **本进程仍持有 dataset cases** 时附带 **`slices_version`**（**`run.report.slices.v3`**）、**`by_expected_behavior`**、**`by_requires_citations`**、**`by_expected_behavior_and_requires_citations`**（交叉桶；`compare` 内嵌报告仍不含切片以免缺 dataset）。
 - **已实现（dataset 持久化）**：Flyway **`V4__eval_dataset_and_case.sql`** 建 `eval_dataset` / `eval_case`；运行时 **`JdbcDatasetStore`**（`DatasetStore` 接口）写入 PostgreSQL，**重启后同一 `dataset_id` 仍可 `GET .../datasets/{id}`、`list cases`、跑 run、`report` 切片**。`DELETE .../datasets/{id}` 会先删引用该库的 **`eval_run`**（级联删 `eval_result`），再删库与题。
-- **待补证据**：业务侧 **E4 限流** 与 eval 侧 **Redis 配额** 的完整 checklist 仍按 **`eval-upgrade.md`** P1/P0+ 验收。
+- **已实现（判定 `p0.v5`）**：`requires_citations=true` 且期望 **`answer`** 时，若 **`meta.low_confidence=true`**，则须提供非空 **`meta.low_confidence_reasons`**（`string[]`）；否则 **`RETRIEVE_LOW_CONFIDENCE`** / **`CONTRACT_VIOLATION`**（见 `RunEvaluator`）。
+- **待补证据（勾选式）**：业务侧 **E4（429）** 与 eval 侧 **Redis 全局配额 / 内存队列回压** 的验收步骤见 **[docs/eval-e4-redis-quota-checklist.md](docs/eval-e4-redis-quota-checklist.md)**；总纲仍对齐 **`eval-upgrade.md`** P1/P0+。排障时 **`GET /internal/eval/status`** 已返回 `eval_runner_*` 与 **`eval_scheduler_global_max_concurrent_runs_per_target`** 等生效配置摘要。
 
 ## 被测方集成（meta 落库 / compare / travel-ai 解耦）
 

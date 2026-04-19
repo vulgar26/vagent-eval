@@ -61,7 +61,13 @@ class VagentEvalApplicationTests {
                 .andExpect(jsonPath("$.targets[0].enabled").value(true))
                 .andExpect(jsonPath("$.targets[0].base_url_origin").value("http://localhost:8080"))
                 .andExpect(jsonPath("$.jdbc_url_masked").value("jdbc:postgresql://localhost:5432/eval"))
-                .andExpect(jsonPath("$.jdbc_username").value("postgres"));
+                .andExpect(jsonPath("$.jdbc_username").value("postgres"))
+                .andExpect(jsonPath("$.eval_scheduler_global_max_concurrent_runs_per_target").value(0))
+                .andExpect(jsonPath("$.eval_runner_max_concurrency").value(8))
+                .andExpect(jsonPath("$.eval_runner_acquire_timeout_ms").value(250))
+                .andExpect(jsonPath("$.eval_runner_target_concurrency").value(1))
+                .andExpect(jsonPath("$.eval_runner_target_queue_capacity").value(50))
+                .andExpect(jsonPath("$.eval_runner_enqueue_timeout_ms").value(250));
     }
 
     /** 验证 {@link InternalEvalStatusController#safeOrigin} 会剥掉 path，只留 origin。 */

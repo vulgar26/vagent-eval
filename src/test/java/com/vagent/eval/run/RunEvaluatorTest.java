@@ -74,7 +74,7 @@ class RunEvaluatorTest {
                     "retrieval": {"supported": false, "score": false},
                     "tools": {"supported": false, "outcome": false}
                   },
-                  "meta": {"mode": "EVAL"}
+                  "meta": {"mode": "EVAL", "disabled_reason": "tooling_off"}
                 }
                 """;
         EvalCase c = new EvalCase(
@@ -90,6 +90,37 @@ class RunEvaluatorTest {
         assertThat(o.verdict()).isEqualTo(Verdict.SKIPPED_UNSUPPORTED);
         assertThat(o.errorCode()).isEqualTo(ErrorCode.SKIPPED_UNSUPPORTED);
         assertThat(o.debug()).containsEntry("verdict_reason", "tools_unsupported");
+        assertThat(o.debug()).containsEntry("meta_disabled_reason", "tooling_off");
+    }
+
+    @Test
+    void citations_retrievalUnsupported_recordsMetaDisabledReason() throws Exception {
+        RunEvaluator evaluator = new RunEvaluator(new EvalChatContractValidator(), props("", 8));
+        String json = """
+                {
+                  "answer": "x",
+                  "behavior": "answer",
+                  "latency_ms": 1,
+                  "capabilities": {
+                    "retrieval": {"supported": false, "score": false},
+                    "tools": {"supported": true, "outcome": true}
+                  },
+                  "meta": {"mode": "EVAL", "disabled_reason": "retrieval_paused"}
+                }
+                """;
+        EvalCase c = new EvalCase(
+                "rs1",
+                "ds",
+                "Q",
+                EvalExpectedBehavior.ANSWER,
+                true,
+                List.of(),
+                Instant.parse("2026-04-10T00:00:00Z")
+        );
+        EvalOutcome o = evaluator.evaluate(c, om.readTree(json), "probe");
+        assertThat(o.verdict()).isEqualTo(Verdict.SKIPPED_UNSUPPORTED);
+        assertThat(o.debug()).containsEntry("verdict_reason", "retrieval_unsupported");
+        assertThat(o.debug()).containsEntry("meta_disabled_reason", "retrieval_paused");
     }
 
     @Test
@@ -397,5 +428,100 @@ class RunEvaluatorTest {
         EvalOutcome o = evaluator.evaluate(c, om.readTree(json), targetId);
         assertThat(o.verdict()).isEqualTo(Verdict.FAIL);
         assertThat(o.errorCode()).isEqualTo(ErrorCode.SOURCE_NOT_IN_HITS);
+    }
+
+    @Test
+    void citations_answer_lowConfidenceTrue_missingReasons_retrieveLowConfidence() throws Exception {
+        RunEvaluator evaluator = new RunEvaluator(new EvalChatContractValidator(), props("s", 8));
+        String json = """
+                {
+                  "answer": "a",
+                  "behavior": "answer",
+                  "latency_ms": 1,
+                  "capabilities": {
+                    "retrieval": {"supported": true, "score": false},
+                    "tools": {"supported": false, "outcome": false}
+                  },
+                  "meta": {"mode": "EVAL", "low_confidence": true},
+                  "retrieval_hits": [{"id": "chunk_a", "title": "t", "snippet": "s"}],
+                  "sources": [{"id": "chunk_a", "title": "t", "snippet": "s"}]
+                }
+                """;
+        EvalCase c = new EvalCase(
+                "lc1",
+                "ds",
+                "Q",
+                EvalExpectedBehavior.ANSWER,
+                true,
+                List.of(),
+                Instant.parse("2026-04-10T00:00:00Z")
+        );
+        EvalOutcome o = evaluator.evaluate(c, om.readTree(json), "vagent");
+        assertThat(o.verdict()).isEqualTo(Verdict.FAIL);
+        assertThat(o.errorCode()).isEqualTo(ErrorCode.RETRIEVE_LOW_CONFIDENCE);
+        assertThat(o.debug()).containsEntry("verdict_reason", "low_confidence_reasons_missing");
+    }
+
+    @Test
+    void citations_answer_lowConfidenceTrue_withReasons_passesMembership() throws Exception {
+        RunEvaluator evaluator = new RunEvaluator(new EvalChatContractValidator(), props("s", 8));
+        String json = """
+                {
+                  "answer": "a",
+                  "behavior": "answer",
+                  "latency_ms": 1,
+                  "capabilities": {
+                    "retrieval": {"supported": true, "score": false},
+                    "tools": {"supported": false, "outcome": false}
+                  },
+                  "meta": {"mode": "EVAL", "low_confidence": true, "low_confidence_reasons": ["weak_lexical"]},
+                  "retrieval_hits": [{"id": "chunk_a", "title": "t", "snippet": "s"}],
+                  "sources": [{"id": "chunk_a", "title": "t", "snippet": "s"}]
+                }
+                """;
+        EvalCase c = new EvalCase(
+                "lc2",
+                "ds",
+                "Q",
+                EvalExpectedBehavior.ANSWER,
+                true,
+                List.of(),
+                Instant.parse("2026-04-10T00:00:00Z")
+        );
+        EvalOutcome o = evaluator.evaluate(c, om.readTree(json), "vagent");
+        assertThat(o.verdict()).isEqualTo(Verdict.PASS);
+        assertThat(o.errorCode()).isNull();
+    }
+
+    @Test
+    void citations_answer_lowConfidenceNotBoolean_contractViolation() throws Exception {
+        RunEvaluator evaluator = new RunEvaluator(new EvalChatContractValidator(), props("s", 8));
+        String json = """
+                {
+                  "answer": "a",
+                  "behavior": "answer",
+                  "latency_ms": 1,
+                  "capabilities": {
+                    "retrieval": {"supported": true, "score": false},
+                    "tools": {"supported": false, "outcome": false}
+                  },
+                  "meta": {"mode": "EVAL", "low_confidence": "yes"},
+                  "retrieval_hits": [{"id": "chunk_a", "title": "t", "snippet": "s"}],
+                  "sources": [{"id": "chunk_a", "title": "t", "snippet": "s"}]
+                }
+                """;
+        EvalCase c = new EvalCase(
+                "lc3",
+                "ds",
+                "Q",
+                EvalExpectedBehavior.ANSWER,
+                true,
+                List.of(),
+                Instant.parse("2026-04-10T00:00:00Z")
+        );
+        EvalOutcome o = evaluator.evaluate(c, om.readTree(json), "vagent");
+        assertThat(o.verdict()).isEqualTo(Verdict.FAIL);
+        assertThat(o.errorCode()).isEqualTo(ErrorCode.CONTRACT_VIOLATION);
+        assertThat(o.debug()).containsEntry("verdict_reason", "meta_low_confidence_must_be_boolean");
     }
 }
