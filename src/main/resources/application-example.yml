@@ -7,6 +7,8 @@ server:
 eval:
   # 与被测 vagent.eval.api 等配置的明文 token 一致；勿写入仓库，用环境变量注入
   default-eval-token: ""
+  # 可选：travel-ai 等要求 X-Eval-Gateway-Key 时注入，须与其 app.eval.gateway-key 一致
+  default-eval-gateway-key: ""
   membership:
     salt: "<CONFIGURE_VIA_ENV_NOT_PLAINTEXT_IN_REPO>"
     top-n: 8
@@ -31,6 +33,7 @@ eval:
     - target-id: travel-ai
       base-url: https://travel-ai.internal.example
       eval-token: ""
+      eval-gateway-key: ""
       enabled: false
       meta-trace-keys: []
 

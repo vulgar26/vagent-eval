@@ -26,11 +26,15 @@ import java.util.Optional;
  * 能按与 {@link CitationMembership} 一致的盐与「前 N」口径构造 {@code retrieval_hits}。
  * <strong>P0+</strong>：{@code X-Eval-Token} 来自 {@link EvalProperties#getDefaultEvalToken()} 与
  * {@link EvalProperties.TargetConfig#getEvalToken()}（见 {@link #resolveEvalToken}），供被测填充 {@code meta.retrieval_hit_id_hashes} 等观测路径。
+ * <strong>travel-ai 等被测</strong>：若启用评测 HTTP 网关，还须 {@code X-Eval-Gateway-Key}（见 {@link #resolveEvalGatewayKey}）。
  */
 @Component
 public class TargetClient {
 
     private static final String EVAL_CHAT_PATH = "/api/v1/eval/chat";
+
+    /** HTTP 头：与被测 {@code app.eval.gateway-key} 对齐（如 travel-ai {@code APP_EVAL_GATEWAY_KEY}）。 */
+    public static final String HDR_EVAL_GATEWAY_KEY = "X-Eval-Gateway-Key";
 
     /** HTTP 头：把配置的 membership salt传给上游（勿在日志中打印完整值）。 */
     public static final String HDR_MEMBERSHIP_SALT = "X-Eval-Membership-Salt";
@@ -80,6 +84,7 @@ public class TargetClient {
         long t0 = System.nanoTime();
 
         String token = resolveEvalToken(targetId);
+        String gatewayKey = resolveEvalGatewayKey(targetId);
 
         // 使用 ObjectNode 显式写字段名，避免与全局 Jackson SNAKE_CASE 对 Java record 的序列化细节耦合导致下游解析异常。
         ObjectNode payload = objectMapper.createObjectNode();
@@ -106,6 +111,9 @@ public class TargetClient {
                 .header(HDR_MEMBERSHIP_SALT, salt)
                 .header(HDR_MEMBERSHIP_TOP_N, Integer.toString(topN))
                 .POST(HttpRequest.BodyPublishers.ofString(body));
+        if (gatewayKey != null && !gatewayKey.isBlank()) {
+            rb.header(HDR_EVAL_GATEWAY_KEY, gatewayKey);
+        }
 
         HttpRequest req = rb.build();
 
@@ -151,6 +159,24 @@ public class TargetClient {
             }
         }
         String d = evalProperties.getDefaultEvalToken();
+        return d == null ? "" : d.trim();
+    }
+
+    /**
+     * 解析发往被测端的 {@code X-Eval-Gateway-Key}：优先 {@code eval.targets[].eval-gateway-key}，否则
+     * {@link EvalProperties#getDefaultEvalGatewayKey()}。与 {@link #resolveEvalToken} 独立；留空则不设置该头。
+     */
+    String resolveEvalGatewayKey(String targetId) {
+        if (targetId != null) {
+            Optional<EvalProperties.TargetConfig> opt = findTarget(targetId);
+            if (opt.isPresent()) {
+                String g = opt.get().getEvalGatewayKey();
+                if (g != null && !g.isBlank()) {
+                    return g.trim();
+                }
+            }
+        }
+        String d = evalProperties.getDefaultEvalGatewayKey();
         return d == null ? "" : d.trim();
     }
 

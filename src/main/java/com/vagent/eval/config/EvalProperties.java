@@ -23,10 +23,12 @@ import java.util.Locale;
  *     allow-cidrs: [...]  → {@link Api#getAllowCidrs}
  *     require-https: ...  → {@link Api#requireHttps}
  *   default-eval-token: "" → {@link #defaultEvalToken}
+ *   default-eval-gateway-key: "" → {@link #defaultEvalGatewayKey}（与需 {@code X-Eval-Gateway-Key} 的被测对齐，如 travel-ai）
  *   targets:               → {@link #targets}
  *     - target-id: vagent → {@link TargetConfig#targetId}
  *       base-url: ...     → {@link TargetConfig#baseUrl}
  *       eval-token: ""    → {@link TargetConfig#getEvalToken}
+ *       eval-gateway-key: "" → {@link TargetConfig#getEvalGatewayKey}
  *       enabled: true     → {@link TargetConfig#enabled}
  *       meta-trace-keys:  → {@link TargetConfig#getMetaTraceKeys}（compare / 探针按 target 选择 meta 子集）
  *   membership:            → {@link #membership}
@@ -88,6 +90,13 @@ public class EvalProperties {
      * per-target 见 {@link TargetConfig#getEvalToken()}。明文勿提交仓库，用环境变量或本地覆盖文件注入。
      */
     private String defaultEvalToken = "";
+
+    /**
+     * 发往被测 {@code POST /api/v1/eval/chat} 时可选的 {@code X-Eval-Gateway-Key} 默认值；
+     * per-target 见 {@link TargetConfig#getEvalGatewayKey()}。须与被测 {@code app.eval.gateway-key}（如 travel-ai 的
+     * {@code APP_EVAL_GATEWAY_KEY}）一致；留空则不发送该头（适用于不要求网关头的被测）。
+     */
+    private String defaultEvalGatewayKey = "";
 
     public Api getApi() {
         return api;
@@ -151,6 +160,14 @@ public class EvalProperties {
 
     public void setDefaultEvalToken(String defaultEvalToken) {
         this.defaultEvalToken = defaultEvalToken == null ? "" : defaultEvalToken;
+    }
+
+    public String getDefaultEvalGatewayKey() {
+        return defaultEvalGatewayKey;
+    }
+
+    public void setDefaultEvalGatewayKey(String defaultEvalGatewayKey) {
+        this.defaultEvalGatewayKey = defaultEvalGatewayKey == null ? "" : defaultEvalGatewayKey;
     }
 
     /**
@@ -232,6 +249,9 @@ public class EvalProperties {
         /** 覆盖 {@link EvalProperties#defaultEvalToken}；仅当非空时使用。 */
         private String evalToken = "";
 
+        /** 覆盖 {@link EvalProperties#defaultEvalGatewayKey}；仅当非空 trim 后使用。 */
+        private String evalGatewayKey = "";
+
         /**
          * 从落库 {@code meta} 中按序拷贝到 compare 的 {@code *_meta_trace} 的键名；空表示不生成摘要（空 map）。
          * 各被测方（vagent / travel-ai 等）观测字段不同，在此按 target 配置白名单，避免在代码里写死某一家的 schema。
@@ -268,6 +288,14 @@ public class EvalProperties {
 
         public void setEvalToken(String evalToken) {
             this.evalToken = evalToken == null ? "" : evalToken;
+        }
+
+        public String getEvalGatewayKey() {
+            return evalGatewayKey;
+        }
+
+        public void setEvalGatewayKey(String evalGatewayKey) {
+            this.evalGatewayKey = evalGatewayKey == null ? "" : evalGatewayKey;
         }
 
         public List<String> getMetaTraceKeys() {

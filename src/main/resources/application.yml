@@ -21,6 +21,8 @@ spring:
 eval:
   # P0+：发往被测的 X-Eval-Token；可用 default-eval-token 或 targets[].eval-token（明文勿入库，见 application-example.yml）
   default-eval-token: ""
+  # 可选：与被测评测网关一致（如 travel-ai APP_EVAL_GATEWAY_KEY）；留空则不发送 X-Eval-Gateway-Key
+  default-eval-gateway-key: ${EVAL_DEFAULT_EVAL_GATEWAY_KEY:}
   # Day6：引用 membership（盐与候选前 N）；生产勿提交真实盐明文
   membership:
     salt: "p0-local-dev"
@@ -64,6 +66,8 @@ eval:
     - target-id: travel-ai
       base-url: http://localhost:8081
       enabled: true
+      # 覆盖全局 default-eval-gateway-key；须与 travel-ai 的 APP_EVAL_GATEWAY_KEY 一致
+      eval-gateway-key: ${EVAL_TRAVEL_AI_GATEWAY_KEY:}
       meta-trace-keys:
         # 流水线与 P0 约束
         - mode
@@ -76,7 +80,7 @@ eval:
         # 检索与门控（RAG / 业务低置信）
         - retrieve_hit_count
         - low_confidence
-        - reasons
+        - low_confidence_reasons
         # SafetyGate 短路归因
         - eval_safety_rule_id
         # 工具治理（与 TOOL_GOVERNANCE_SPEC / stub 对齐）

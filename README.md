@@ -17,6 +17,8 @@ Windows 若无全局 `mvn`：先设置 `JAVA_HOME` 指向 JDK 21+，再执行 `.
 
 配置见 `src/main/resources/application.yml`；生产示例见 `application-example.yml`（勿提交真实密钥）。
 
+**travel-ai 评测网关**：若被测开启 **`APP_EVAL_GATEWAY_KEY`**，本进程须设置环境变量 **`EVAL_TRAVEL_AI_GATEWAY_KEY`**（与之一致），或在 `application-local.yml` 中为 `travel-ai` target 填写 **`eval-gateway-key`**。否则 `TargetClient` 不发送 **`X-Eval-Gateway-Key`**，travel-ai 会返回 **401**。CI 见 [docs/github-actions-secrets.md](docs/github-actions-secrets.md)；总纲见 Vagent 仓库 **`plans/eval-upgrade.md`**「认证方式 / 本机复现清单」。
+
 ## P0 联调状态（2026-04-18，摘要）
 
 - **已验证（本机 + 双 target）**：对 `plans/datasets/p0-dataset-v0.jsonl`（**32 case**，源文件在 **Vagent** 仓库 `D:\Projects\Vagent\plans\datasets\`）导入后，分别对 **`vagent`**、**`travel-ai`** 跑满 `FINISHED`，并生成 **`GET .../runs/{id}/report`**（`run.report.v1`）与 **`GET .../compare`**（`compare.v1`）。示例 `run_id` 与登记见 **`D:\Projects\Vagent\plans\regression-baseline-convention.md`** §4 / §4.1；总纲与缺口见 **`D:\Projects\Vagent\plans\eval-upgrade.md`**「vagent-eval 与双 target 联调状态」及该文档 **P0 退出标准** 下的验收快照。

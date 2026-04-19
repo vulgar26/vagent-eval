@@ -8,7 +8,8 @@
 
 1. **两个 target 的公网可达 HTTPS 地址**（GitHub 托管 runner 在公网；若服务只在内网，须改用 [self-hosted runner](https://docs.github.com/en/actions/hosting-your-own-runners/managing-self-hosted-runners/about-self-hosted-runners) 或 VPN/隧道，否则 workflow 永远连不上）。
 2. **与被测服务一致的 `X-Eval-Token` 明文**（仅存 GitHub Secret，勿提交仓库）。
-3. （可选）**membership 盐**：若跑 `requires_citations` + membership 相关题，需与业务侧一致；否则可先不配 smoke 题集。
+3. **travel-ai 评测网关**：若被测已配置非空的 **`APP_EVAL_GATEWAY_KEY`**（`app.eval.gateway-key`），eval 必须在调用 `POST /api/v1/eval/chat` 时发送 **`X-Eval-Gateway-Key`**。`vagent-eval` 通过环境变量 **`EVAL_TRAVEL_AI_GATEWAY_KEY`** 注入（与默认 `application.yml` 中 `eval.targets.travel-ai.eval-gateway-key: ${EVAL_TRAVEL_AI_GATEWAY_KEY:}` 对齐）；**须与 travel-ai 的 `APP_EVAL_GATEWAY_KEY` 完全一致**，否则 workflow 对 travel-ai 会得到 **401**。
+4. （可选）**membership 盐**：若跑 `requires_citations` + membership 相关题，需与业务侧一致；否则可先不配 smoke 题集。
 
 ## 在 GitHub Web UI 里配置
 
@@ -26,12 +27,14 @@
 | Name | 说明 |
 |------|------|
 | `EVAL_DEFAULT_EVAL_TOKEN` | eval 调用被测时写入的 `X-Eval-Token` 明文 |
+| `EVAL_TRAVEL_AI_GATEWAY_KEY` | （travel-ai 启用评测网关时**必填**）与 travel-ai `APP_EVAL_GATEWAY_KEY` 同值；写入 `X-Eval-Gateway-Key` |
 | `EVAL_MEMBERSHIP_SALT` | （可选）与 `eval.membership.salt` 对齐 |
 
 ### 被测服务侧必须满足
 
 - `vagent.eval.api.enabled=true` / `travelai.eval.api.enabled=true`（以各自仓库为准）
 - Token 与 eval 侧一致；HTTPS 与 CIDR 策略允许 GitHub runner 出口 IP（或放宽到你们能接受的范围）
+- travel-ai：若配置非空 **`app.eval.gateway-key`**，eval 侧必须提供 **`EVAL_TRAVEL_AI_GATEWAY_KEY`**（或等价配置），否则 **401**
 
 ## 用 GitHub CLI 写入（本机已 `gh auth login`）
 
@@ -42,6 +45,8 @@ gh variable set EVAL_TARGET_VAGENT_BASE_URL --body "https://你的-vagent-域名
 gh variable set EVAL_TARGET_TRAVEL_AI_BASE_URL --body "https://你的-travel-ai-域名"
 
 gh secret set EVAL_DEFAULT_EVAL_TOKEN --body "你的明文-token"
+# travel-ai 若启用 APP_EVAL_GATEWAY_KEY，须与之一致：
+# gh secret set EVAL_TRAVEL_AI_GATEWAY_KEY --body "与 travel-ai 网关同值的密钥"
 # 可选：
 # gh secret set EVAL_MEMBERSHIP_SALT --body "你的盐"
 ```

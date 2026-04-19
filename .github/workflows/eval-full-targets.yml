@@ -69,6 +69,7 @@ jobs:
         env:
           SPRING_CONFIG_ADDITIONAL_LOCATION: file:/tmp/eval-ci-overlay.yml
           EVAL_DEFAULT_EVAL_TOKEN: ${{ secrets.EVAL_DEFAULT_EVAL_TOKEN }}
+          EVAL_TRAVEL_AI_GATEWAY_KEY: ${{ secrets.EVAL_TRAVEL_AI_GATEWAY_KEY }}
           EVAL_MEMBERSHIP_SALT: ${{ secrets.EVAL_MEMBERSHIP_SALT }}
         run: |
           mvn -B spring-boot:run > eval.log 2>&1 &
