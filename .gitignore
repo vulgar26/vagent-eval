@@ -1,18 +1,38 @@
 .tools/
+
+### Build outputs ###
 target/
+build/
+dist/
+out/
+local-artifacts/
 !.mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### Local logs and eval exports ###
+*.log
+mvn_test*.log
+eval_run_*.json
+eval_compare_*.json
+eval_compare_*.md
+
+### Local Spring profiles / secrets ###
+src/main/resources/application-local.yml
+application-local.yml
+.env
+.env.*
 
 ### IntelliJ IDEA ###
 .idea/
-.idea/modules.xml
-.idea/jarRepositories.xml
-.idea/compiler.xml
-.idea/libraries/
 *.iws
 *.iml
 *.ipr
+
+### VS Code ###
+.vscode/
 
 ### Eclipse ###
 .apt_generated
@@ -26,33 +46,12 @@ target/
 ### NetBeans ###
 /nbproject/private/
 /nbbuild/
-/dist/
 /nbdist/
 /.nb-gradle/
-build/
-!**/src/main/**/build/
-!**/src/test/**/build/
 
-### Day10 script output ###
-out/
-
-### Local eval exports / scratch ###
-eval_run_*results.json
-
-### VS Code ###
-.vscode/
-
-### Mac OS ###
+### OS / office scratch ###
 .DS_Store
-
-### Local Spring profiles / secrets ###
-src/main/resources/application-local.yml
-
-### Local Maven / test log scratch ###
-mvn_test*.log
-
-### Microsoft Office lock / autosave recovery (never commit) ###
+Thumbs.db
 ~$*
 ~WRL*.tmp
-# Local scratch doc at repo root (do not add by mistake)
 命令行.docx

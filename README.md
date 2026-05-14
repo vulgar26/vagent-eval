@@ -1,84 +1,164 @@
 # vagent-eval
 
-P0 统一评测服务（独立部署）。Day1：可启动、读取 `eval.targets`、Actuator 与 `/internal/eval/status`。
+`vagent-eval` is a rule-based Evaluation Harness for RAG / LLM applications. It imports fixed datasets, calls one or more target services through a stable eval API, evaluates responses with deterministic rules, stores run results, and generates reports or base/candidate comparisons.
 
-## 运行
+This project is **not** an LLM-as-judge service. It is designed for repeatable regression checks around RAG behavior, citation constraints, low-confidence handling, tool expectations, and response contract compliance.
 
-需要 **JDK 21** 与 **Maven 3.9+**（或仓库根目录的 **Maven Wrapper**：`mvnw.cmd` / `mvnw`）。
+## Core Flow
+
+```text
+Dataset Import -> Target Call -> Rule Evaluation -> Result Store -> Report / Compare
+```
+
+- **Dataset Import**: create datasets and import cases from JSONL or CSV.
+- **Target Call**: execute cases against configured targets via `POST /api/v1/eval/chat`.
+- **Rule Evaluation**: validate response contract, expected behavior, citations, membership evidence, low-confidence metadata, and tool outcomes.
+- **Result Store**: persist runs, results, audit events, datasets, and cases in PostgreSQL.
+- **Report / Compare**: generate single-run summaries, tag-bucket reports, and base/candidate regression diffs.
+
+## Tech Stack
+
+- Java 21
+- Spring Boot 3
+- Spring Web / JDBC / Validation / Actuator
+- PostgreSQL
+- Flyway
+- Redis / Lettuce for optional run queue and quota coordination
+- Micrometer / Prometheus metrics
+- JUnit 5, Mockito, Spring Boot Test
+- GitHub Actions CI
+
+## Implemented Features
+
+- Dataset management APIs with JSONL and CSV import.
+- Multi-target eval execution through configurable `eval.targets`.
+- Deterministic rule evaluation for RAG-style responses:
+  - response contract validation
+  - expected behavior matching
+  - citation presence checks
+  - hashed citation membership checks
+  - low-confidence reason checks
+  - tool expectation checks
+- PostgreSQL persistence for datasets, cases, runs, results, and audit events.
+- Flyway migrations for schema setup.
+- Report generation with pass rate, skipped rate, latency, error-code summary, and dataset slices.
+- Base/candidate compare API for regression review.
+- Optional Redis-backed run queue and global per-target run quota primitives.
+- Micrometer metrics for run creation, terminal states, case verdicts, target HTTP latency, and scheduling rejection.
+- CI workflow with PostgreSQL service and `mvn test`.
+
+Redis queue/quota support has the foundational implementation and focused tests. Full pressure-test evidence for production-like quota behavior is still listed as follow-up work.
+
+## Quick Start
+
+Requirements:
+
+- JDK 21
+- Maven 3.9+ or the Windows Maven wrapper `mvnw.cmd`
+- PostgreSQL database named `eval` for integration tests and local persistence
+
+Run tests:
+
+```bash
+mvn test
+```
+
+Start the service:
 
 ```bash
 mvn spring-boot:run
 ```
 
-Windows 若无全局 `mvn`：先设置 `JAVA_HOME` 指向 JDK 21+，再执行 `.\mvnw.cmd spring-boot:run` 或 `.\mvnw.cmd test`。
+Windows without global Maven:
 
-本机覆盖配置：在 `src/main/resources/application-local.yml` 写 token、网关等（已在 `.gitignore`）。`application.yml` 已配置 **`spring.config.import: optional:classpath:application-local.yml`**，有该文件时会自动合并，**不必**再设 `SPRING_PROFILES_ACTIVE=local`（仍可用 profile 做其他环境区分）。
+```powershell
+.\mvnw.cmd test
+.\mvnw.cmd spring-boot:run
+```
 
-- 健康检查：`GET http://localhost:8099/actuator/health`
-- 进程与 target 配置摘要：`GET http://localhost:8099/internal/eval/status`（不含 token）
+Health check:
 
-配置见 `src/main/resources/application.yml`；生产示例见 `application-example.yml`（勿提交真实密钥）。
+```bash
+curl http://localhost:8099/actuator/health
+```
 
-**travel-ai 评测网关**：若被测开启 **`APP_EVAL_GATEWAY_KEY`**，本进程须设置环境变量 **`EVAL_TRAVEL_AI_GATEWAY_KEY`**（与之一致），或在 `application-local.yml` 中为 `travel-ai` target 填写 **`eval-gateway-key`**。否则 `TargetClient` 不发送 **`X-Eval-Gateway-Key`**，travel-ai 会返回 **401**。CI 见 [docs/github-actions-secrets.md](docs/github-actions-secrets.md)；总纲见 Vagent 仓库 **`plans/eval-upgrade.md`**「认证方式 / 本机复现清单」。
+Local secrets and target overrides should go into `src/main/resources/application-local.yml`, which is ignored by Git. Do not commit real tokens, gateway keys, salts, or private target URLs.
 
-## P0 联调状态（2026-04-18，摘要）
+## Environment Variables
 
-- **已验证（本机 + 双 target）**：对 `plans/datasets/p0-dataset-v0.jsonl`（**32 case**，源文件在 **Vagent** 仓库 `D:\Projects\Vagent\plans\datasets\`）导入后，分别对 **`vagent`**、**`travel-ai`** 跑满 `FINISHED`，并生成 **`GET .../runs/{id}/report`**（`run.report.v1`）与 **`GET .../compare`**（`compare.v1`）。示例 `run_id` 与登记见 **`D:\Projects\Vagent\plans\regression-baseline-convention.md`** §4 / §4.1；总纲与缺口见 **`D:\Projects\Vagent\plans\eval-upgrade.md`**「vagent-eval 与双 target 联调状态」及该文档 **P0 退出标准** 下的验收快照。
-- **已实现（2026-04-18）**：`GET .../runs/{id}/report` 在 **本进程仍持有 dataset cases** 时附带 **`slices_version`**（**`run.report.slices.v3`**）、**`by_expected_behavior`**、**`by_requires_citations`**、**`by_expected_behavior_and_requires_citations`**（交叉桶；`compare` 内嵌报告仍不含切片以免缺 dataset）。
-- **已实现（dataset 持久化）**：Flyway **`V4__eval_dataset_and_case.sql`** 建 `eval_dataset` / `eval_case`；运行时 **`JdbcDatasetStore`**（`DatasetStore` 接口）写入 PostgreSQL，**重启后同一 `dataset_id` 仍可 `GET .../datasets/{id}`、`list cases`、跑 run、`report` 切片**。`DELETE .../datasets/{id}` 会先删引用该库的 **`eval_run`**（级联删 `eval_result`），再删库与题。
-- **已实现（判定 `p0.v5`）**：`requires_citations=true` 且期望 **`answer`** 时，若 **`meta.low_confidence=true`**，则须提供非空 **`meta.low_confidence_reasons`**（`string[]`）；否则 **`RETRIEVE_LOW_CONFIDENCE`** / **`CONTRACT_VIOLATION`**（见 `RunEvaluator`）。
-- **待补证据（勾选式）**：业务侧 **E4（429）** 与 eval 侧 **Redis 全局配额 / 内存队列回压** 的验收步骤见 **[docs/eval-e4-redis-quota-checklist.md](docs/eval-e4-redis-quota-checklist.md)**；总纲仍对齐 **`eval-upgrade.md`** P1/P0+。排障时 **`GET /internal/eval/status`** 已返回 `eval_runner_*` 与 **`eval_scheduler_global_max_concurrent_runs_per_target`** 等生效配置摘要。
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `EVAL_DEFAULT_EVAL_TOKEN` | Optional | Default token sent to target services as `X-Eval-Token` when a target-specific token is not configured. |
+| `EVAL_TRAVEL_AI_GATEWAY_KEY` | Optional | Gateway key sent as `X-Eval-Gateway-Key` for targets that require an eval gateway header. |
+| `EVAL_MEMBERSHIP_SALT` | Optional | Salt used by target-side membership evidence generation when supplied through deployment configuration. |
+| `SPRING_DATASOURCE_URL` | Local/CI | PostgreSQL JDBC URL, for example `jdbc:postgresql://localhost:5432/eval`. |
+| `SPRING_DATASOURCE_USERNAME` | Local/CI | PostgreSQL username. |
+| `SPRING_DATASOURCE_PASSWORD` | Local/CI | PostgreSQL password. |
+| `SPRING_DATA_REDIS_HOST` | Optional | Redis host when enabling Redis scheduling. |
+| `SPRING_DATA_REDIS_PORT` | Optional | Redis port when enabling Redis scheduling. |
+| `SPRING_DATA_REDIS_PASSWORD` | Optional | Redis password when needed. |
 
-## 被测方集成（meta 落库 / compare / travel-ai 解耦）
+See [`src/main/resources/application-example.yml`](src/main/resources/application-example.yml) for a sanitized configuration template.
 
-- **vagent / travel-ai 共用一份说明**：[docs/target-integration-meta-and-compare.md](docs/target-integration-meta-and-compare.md)（`meta` 落库、`meta-trace-keys`、探针行为与安全边界）
+## Core APIs
 
-## 阶段四：按 target 的调度队列（FIFO + 回压）
+| Method | Path | Description |
+| --- | --- | --- |
+| `POST` | `/api/v1/eval/datasets` | Create a dataset. |
+| `GET` | `/api/v1/eval/datasets` | List datasets. |
+| `GET` | `/api/v1/eval/datasets/{dataset_id}` | Get dataset metadata. |
+| `DELETE` | `/api/v1/eval/datasets/{dataset_id}` | Delete a dataset and related runs/results. |
+| `GET` | `/api/v1/eval/datasets/{dataset_id}/cases` | List imported cases. |
+| `POST` | `/api/v1/eval/datasets/{dataset_id}/import` | Import JSONL or CSV cases. |
+| `POST` | `/api/v1/eval/runs` | Create and enqueue a run for a target. |
+| `GET` | `/api/v1/eval/runs` | List runs. |
+| `GET` | `/api/v1/eval/runs/{run_id}` | Get run status. |
+| `POST` | `/api/v1/eval/runs/{run_id}/cancel` | Request run cancellation. |
+| `GET` | `/api/v1/eval/runs/{run_id}/results` | List case results. |
+| `GET` | `/api/v1/eval/runs/{run_id}/report` | Generate a run report. |
+| `GET` | `/api/v1/eval/runs/{run_id}/report/buckets` | Generate tag-prefix bucket reports. |
+| `GET` | `/api/v1/eval/compare` | Compare base and candidate runs. |
+| `GET` | `/internal/eval/status` | Show sanitized runtime and target configuration summary. |
 
-- **语义**：每个 `target_id` 一条 lane（`ArrayBlockingQueue` + worker）；`POST /api/v1/eval/runs` 创建 run 后入队异步执行，不再为每个 run `new Thread`。
-- **配置**（`eval.runner`）：
-  - `target-concurrency`：该 target 的 worker 数（默认 `1`，同 target 内顺序更稳定）
-  - `target-queue-capacity`：待调度 run 队列长度
-  - `enqueue-timeout-ms`：入队等待；队列满或超时则该 run 直接 `CANCELLED`，`cancel_reason` 形如 `schedule_rejected:QUEUE_FULL` / `schedule_rejected:ENQUEUE_TIMEOUT`
-- **可观测**：指标 `eval.runner.enqueue.rejected{target_id,reason}`；审计事件 `RUN_SCHEDULE_REJECT`（`actor=system`）
-- **单测**：`mvn test` 前需本机或 CI 上可连 PostgreSQL 库 `eval`（见 `src/test/resources/application.yml`；CI 已在 `.github/workflows/ci.yml` 中启动 `postgres:15` 服务）。在 JDK 25 等环境下 Mockito 默认 inline 可能受限，本仓库在 `src/test/resources/mockito-extensions/` 指定了 subclass mock maker。
+The optional local probe endpoint `POST /api/v1/eval/chat` is for demos and contract testing only. Real evaluation runs still call configured target services.
 
-## 阶段五 5.1：Redis 接入（连通性）
+## Evaluation Rules
 
-- **连接**：使用 Spring Boot 标准 `spring.data.redis.*`（或 `SPRING_DATA_REDIS_*` 环境变量），由 `spring-boot-starter-data-redis` + Lettuce 自动装配 `RedisConnectionFactory`。
-- **业务配置**（`eval.scheduler.redis`，与连接分离）：
-  - `enabled`：为 `true` 时，启动阶段对 Redis 执行一次 `PING` 校验；默认 `false`。
-  - `key-prefix`：调度相关 Redis key 的统一前缀（建议以 `:` 结尾）；默认 `vagent:eval:`。
-  - `on-connect-failure`：`lenient`（仅告警）或 `strict`（启动失败）。
-- **状态**：`GET /internal/eval/status` 会返回 `eval_scheduler_redis_*` 摘要字段（不含密钥）。
+The evaluator is deterministic and rule based. It checks whether the target response matches a known eval contract and expected case behavior.
 
-## 阶段五 5.2：Redis 跨实例 run 队列
+Important rule categories:
 
-- **何时启用**：`eval.scheduler.redis.enabled=true` **且** Spring 已装配 `StringRedisTemplate`（通常需同时配置 `spring.data.redis.*`）。此时 `POST /api/v1/eval/runs` 将 run 写入 Redis 列表（每 target 一条队列：`{keyPrefix}schedule:queue:{target_id}`），由本机及**其他实例**上的 worker 阻塞消费并执行 `RunRunner`。
-- **何时回退内存**：`enabled=false`，或 `enabled=true` 但无 `StringRedisTemplate`（会打 WARN 并回退到阶段四内存队列）。
-- **与 `eval.runner` 对齐**：`target-queue-capacity`（列表深度上限）、`target-concurrency`（每实例每 target 的 BLPOP worker 数）、`enqueue-timeout-ms`（队列满时等待入队）。
-- **多实例安全**：`RunStore.tryMarkStarted` 仅在 `PENDING` 时原子改为 `RUNNING`，避免同一 `run_id` 被重复执行。
-- **消费阻塞**：`eval.scheduler.redis.br-pop-timeout-seconds`（默认 `5`），超时后循环便于优雅停机。
+- **Contract**: required fields and valid JSON shape.
+- **Behavior**: expected behavior such as answer, clarify, deny, or tool.
+- **Citations**: answer cases that require citations must provide valid sources.
+- **Citation membership**: cited source IDs must be present in target-provided retrieval evidence, preferably through hashed membership fields.
+- **Low confidence**: when `meta.low_confidence=true`, the response must provide non-empty `meta.low_confidence_reasons`.
+- **Tool path**: tool cases must show required, used, and succeeded tool state.
+- **Security boundary**: sensitive debug fields are only allowed in explicit eval-debug mode.
 
-## Day2 草案
+This harness is useful for regression checks and behavior gates. It does not score answer quality with another model.
 
-Dataset 导入 API 与 JSONL/CSV 行格式见 [docs/day2-dataset-import-draft.md](docs/day2-dataset-import-draft.md)。
+## Evidence
 
-## Day10（A 线 P0 收口）
+- End-to-end demo walkthrough: [`docs/evidence/eval-run-demo.md`](docs/evidence/eval-run-demo.md)
+- Sanitized sample report: [`docs/evidence/day10-report.sample.json`](docs/evidence/day10-report.sample.json)
+- Sanitized sample compare output: [`docs/evidence/day10-compare.sample.json`](docs/evidence/day10-compare.sample.json)
+- Target integration notes: [`docs/target-integration-meta-and-compare.md`](docs/target-integration-meta-and-compare.md)
+- GitHub Actions secrets guide: [`docs/github-actions-secrets.md`](docs/github-actions-secrets.md)
 
-- **带教与验收**：[docs/day10-guide.md](docs/day10-guide.md)  
-- **一键导出脚本**（需先启动服务并 `--eval.api.enabled=true`）：[scripts/day10-export-demo.ps1](scripts/day10-export-demo.ps1) / [scripts/day10-export-demo.sh](scripts/day10-export-demo.sh) → 产物在 `out/`（已忽略提交）  
-- **脱敏示例 JSON**：[docs/evidence/](docs/evidence/README.md)；**已知限制**：[docs/day10-known-limitations.md](docs/day10-known-limitations.md)
+## Known Limitations
 
-## GitHub Actions（CI + 自动化产物）
+- This is a rule-based regression harness, not semantic answer grading.
+- A run still calls the configured target service; it is not a fully offline model evaluator.
+- Local probe mode validates contracts and rules, but does not prove real RAG retrieval quality.
+- Redis queue/quota support has basic implementation and tests; complete pressure-test and acceptance evidence is still pending.
+- Test execution expects PostgreSQL to be available unless the test profile is adjusted.
+- Some admin/API security settings are intentionally configurable for local demos; production use should require token, network boundary, and HTTPS controls.
 
-- **单测 CI**：`.github/workflows/ci.yml`（push / PR 跑 `mvn test`）
-- **探针 nightly / 手动**：`.github/workflows/eval-demo-artifacts.yml`（本服务 `probe` + `day10-export-demo.sh`，上传 report/compare）
-- **真实 target smoke（手动）**：`.github/workflows/eval-full-targets.yml` — 需先在仓库配置 **Variables + Secret**，步骤见 [docs/github-actions-secrets.md](docs/github-actions-secrets.md)
+## Roadmap
 
-## P0+ S3（周报：按 tags 分桶子报表）
-
-- **HTTP**：`GET /api/v1/eval/runs/{run_id}/report/buckets`  
-  - 可重复传 `tag_prefix`（例如 `tag_prefix=attack/&tag_prefix=rag/empty`）；不传则默认三桶：`attack/`、`rag/empty`、`rag/low_conf`  
-  - 可选：`error_code_top_n`（同 `/report`）  
-- **导出脚本**：[scripts/p0plus-bucket-export.ps1](scripts/p0plus-bucket-export.ps1)（把 `report` + `report/buckets` 落到 `out/`）
+- Add a concise architecture diagram.
+- Add Docker Compose for local PostgreSQL/Redis startup.
+- Expand Redis queue/quota pressure-test evidence.
+- Add OpenAPI documentation or generated API examples.
+- Improve CI artifacts for sanitized report and compare examples.
