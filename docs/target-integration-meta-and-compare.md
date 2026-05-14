@@ -1,45 +1,35 @@
-# 被测方集成说明：meta 落库、导出与 compare（vagent / travel-ai）
+# Target Integration: meta, result, compare
 
-本文面向 **vagent**、**travel-ai** 等被测服务方与联调同学，说明 **vagent-eval** 当前如何消费你们 `POST /api/v1/eval/chat`（或等价路径）的响应，以及你们在配置侧需要关注什么。**eval 不假设所有 target 共用同一套 `meta` 键**；按 `eval.targets[].target-id` 分别配置。
+本文说明被测服务如何接入 `vagent-eval`。目标是让 target 的 `POST /api/v1/eval/chat` 响应可以被评测服务稳定消费、落库，并进入 report / compare。
 
----
+`vagent-eval` 不要求所有 target 使用同一套 `meta` 字段。每个 target 可通过 `eval.targets[].meta-trace-keys` 配置需要进入 compare 摘要的字段。
 
-## 1. 事实（eval 侧行为）
+## Eval 侧行为
 
 | 项目 | 说明 |
-|------|------|
-| **持久化** | 每条 case 结果除原有 `debug_json`（判分摘要、白名单清洗）外，增加 **`eval_result.target_meta_json`**：保存上游响应根级 **`meta` 对象** 的快照（JSONB）。**不**默认保存整段 `EvalChatResponse` 正文（如长 `answer` / 全量 `sources`），以控制体积；检索类归因以 `meta`（及你们已在根级返回的字段）为准。 |
-| **API / 导出** | `GET /api/v1/eval/runs/{run_id}/results` 返回的每条结果含 **`meta`**（与 `debug` 并列）。序列化字段名为 **snake_case**（与 Spring/Jackson 全局策略一致）。 |
-| **语义** | **`debug`**：eval 判分与契约摘要（经 `DebugSanitizer`）。**`meta`**：来自被测响应的观测快照，**不做** debug 那套白名单裁剪；仅做 **安全与体积** 策略（见下）。 |
-| **明文 `retrieval_hit_ids`** | 落库前默认 **删除** `meta.retrieval_hit_ids`；仅当 `eval.persistence.allow-plain-retrieval-hit-ids-in-meta=true` **且** `eval.runner.chat-mode=EVAL_DEBUG` 时可能保留（内网联调）。出站：未带 `X-Eval-Debug` 的管理 API 响应中仍会去掉该键。请与贵方 **EVAL_DEBUG + allow-cidrs** 等产品策略对齐。 |
-| **超大 `meta`** | `eval.persistence.max-target-meta-json-chars`（默认约 256Ki 字符的 JSON 串长）超限则 **整段 `meta` 不落库**（该条 `meta` 为空）。 |
+| --- | --- |
+| Target 调用 | run 执行时，评测服务调用 `{target.base-url}/api/v1/eval/chat`。 |
+| 结果落库 | 每条 case result 会保存 verdict、error_code、latency、debug 摘要和 target 返回的根级 `meta` 快照。 |
+| `meta` 处理 | `meta` 主要用于回归观察和 compare 摘要，不作为完整业务响应存档。 |
+| 敏感字段 | 默认不保留明文 `meta.retrieval_hit_ids`；只有明确打开 debug 相关配置时才用于内网联调。 |
+| 体积限制 | 超过 `eval.persistence.max-target-meta-json-chars` 的 `meta` 不落库，避免单条结果过大。 |
 
-### 1.1 与判定器相关的 `meta` 键（`RunEvaluator`）
+## Target 响应要求
 
-- **`meta.low_confidence` / `meta.low_confidence_reasons`**：当题面 **`requires_citations=true`** 且期望 **`answer`** 时，若 **`meta.low_confidence=true`**，则 **`meta.low_confidence_reasons`** 须为**非空** `string[]`（**p0.v5**）；否则结果记 **`RETRIEVE_LOW_CONFIDENCE`** 或 **`CONTRACT_VIOLATION`**。
-- **`meta.disabled_reason`**：可选字符串。若因 **`capabilities`** 声明**不支持检索/工具**而得到 **`SKIPPED_UNSUPPORTED`**，eval 会将非空的 **`disabled_reason`** 写入结果 **`debug.meta_disabled_reason`**，便于与下游「能力降级」叙事对齐。
+target 应返回稳定 JSON，至少满足 eval/chat 契约，并根据能力返回对应字段：
 
----
+- `behavior`：实际行为，例如 `answer`、`clarify`、`deny`、`tool`。
+- `capabilities`：声明 retrieval / tools 等能力是否支持。
+- `sources`：当 answer 需要引用时返回引用来源。
+- `meta`：放置检索、低置信、工具治理等可观测字段。
+- `meta.low_confidence` / `meta.low_confidence_reasons`：当低置信为 true 时，必须提供非空原因数组。
+- `meta.retrieval_hit_id_hashes`：用于 citation membership 检查，推荐返回 hash 后的候选证据。
 
-## 2. 对 vagent 方的约定（与既有 SSOT 对齐）
+## meta-trace-keys
 
-- 观测 **SSOT** 仍在贵方 **`EvalChatResponse.meta`**（及根级 `retrieval_hits` 等）中；eval **原样（在安全策略内）落库 `meta`**，不要求再把同一套字段抄进 eval 的 `debug`。
-- 若某 PASS case 有检索命中且贵方 `meta` 含 `retrieve_hit_count > 0`，eval 导出/DB 中应能出现贵方写入的距离类字段（若贵方在 0 命中时不写距离字段，eval 侧视为预期）。
-- **compare 摘要键**：在 `application.yml` 里为 `target-id: vagent` 配置 **`eval.targets[].meta-trace-keys`**（snake_case 列表）。compare 的 `base_meta_trace` / `cand_meta_trace` **仅拷贝列表中出现的键**，便于跨 run 对比；未配置的键不会出现在 compare 摘要里（全量仍以 `GET .../results` 的 `meta` 为准）。
+`meta-trace-keys` 控制 compare 输出中 `base_meta_trace`、`cand_meta_trace` 等摘要字段。未配置的 key 不会进入 compare 摘要，但原始 result 中仍可查看落库后的 `meta`。
 
----
-
-## 3. 对 travel-ai 方的约定（与 vagent 解耦）
-
-- **不要求** `meta` 中出现与 vagent 相同的 `hybrid_lexical_mode`、`retrieve_top1_distance` 等键；以贵方实际返回的 **`meta` JSON** 为准，eval **按字节落库**（在大小与 `retrieval_hit_ids` 策略内）。
-- **compare**：为贵方 target 配置 **`meta-trace-keys`** 为贵方希望出现在 `*_meta_trace` 里的键名即可；若留空或不配置，compare 中对应 trace 为 **空对象** `{}`，避免套用 vagent 字段名。
-- **本地探针**（`eval.probe.enabled=true` 时本进程模拟 `/api/v1/eval/chat`）：仅当某 target 配置了 `meta-trace-keys` 时，探针才可能为 **CITATIONS_OK** 类用例注入少量**联调用固定样本**；样本仅覆盖 eval 内置的少数键（见 `ProbeMetaAugmentor`）。**未在列表中声明的键不会由探针伪造**；贵方专有键请走真实服务或自行扩展探针逻辑。
-
----
-
-## 4. 配置示例（运维 / 平台）
-
-**vagent**（与当前仓库默认思路一致）：
+示例：
 
 ```yaml
 eval:
@@ -48,48 +38,42 @@ eval:
       base-url: https://your-vagent-host
       enabled: true
       meta-trace-keys:
-        - hybrid_lexical_mode
-        - hybrid_lexical_outcome
         - retrieve_hit_count
+        - low_confidence
         - retrieve_top1_distance
-        - retrieve_top1_distance_bucket
-```
-
-**travel-ai**（不在 compare 摘要中强制 vagent 键；可按贵方 `meta` 逐步加键）：
-
-```yaml
-eval:
-  targets:
     - target-id: travel-ai
       base-url: https://your-travel-host
       enabled: true
-      meta-trace-keys: []   # 或列出贵方用于回归对比的键，例如:
-      # meta-trace-keys:
-      #   - your_retrieval_signal_foo
-      #   - your_latency_breakdown_bar
+      meta-trace-keys:
+        - retrieve_hit_count
+        - low_confidence
+        - tool_calls_count
 ```
 
----
+## Headers
 
-## 5. 相关 HTTP / 数据路径（便于对方文档交叉引用）
+评测服务调用 target 时会携带 eval 相关 header。常见字段包括：
 
-- 创建 run、拉结果、compare：`RunApi` / `CompareApi`（路径以仓库内 `**/RunApi.java`、`CompareApi.java` 为准）。
-- **compare** 在 `regressions` / `improvements` 行内：`base_meta_trace`、`cand_meta_trace`（按**该行结果**的 `target_id` 解析 `meta-trace-keys`）；`missing_in_*` 行内：`present_meta_trace`。
-- 迁移：`src/main/resources/db/migration/V3__eval_result_target_meta.sql`。
+| Header | 说明 |
+| --- | --- |
+| `X-Eval-Run-Id` | 当前 run id。 |
+| `X-Eval-Dataset-Id` | 当前 dataset id。 |
+| `X-Eval-Case-Id` | 当前 case id。 |
+| `X-Eval-Target-Id` | 当前 target id。 |
+| `X-Eval-Token` | 可选，用于 target 侧鉴权或 membership hash 派生。 |
+| `X-Eval-Gateway-Key` | 可选，用于需要额外网关 key 的 target。 |
+| `X-Eval-Membership-Top-N` | citation membership 使用的候选截断上限。 |
 
----
+真实 token、gateway key、salt 不应提交到仓库；请通过环境变量、部署配置或 `application-local.yml` 注入。
 
-## 6. 变更沟通
+## 相关 API
 
-若贵方 **`meta` 键集合或语义**有破坏性变更，建议同步 eval 运维：**更新对应 target 的 `meta-trace-keys`**（及依赖导出字段的脚本/看板）。eval 侧不解析业务含义，只负责存储与按配置摘要。
+- 创建 run：`POST /api/v1/eval/runs`
+- 查看 result：`GET /api/v1/eval/runs/{run_id}/results`
+- 生成 report：`GET /api/v1/eval/runs/{run_id}/report`
+- 对比 run：`GET /api/v1/eval/compare?base_run_id=...&cand_run_id=...`
+- 查看运行状态摘要：`GET /internal/eval/status`
 
----
+## 变更建议
 
-## 7. 与组织 SSOT `eval-upgrade.md` 的对应关系
-
-- **文档位置（业务仓库）**：在 **Vagent** 仓库内为 `plans/eval-upgrade.md`（与 `p0-execution-map.md` 等并列）。评测产品/契约的**主 SSOT**以该文件为准；本文仅描述 **vagent-eval 仓库**内的落地行为，避免双写漂移。
-- **Harness 两层**：`eval-upgrade.md` 将 **Evaluation Harness**（本服务：dataset、run、判定、compare、报表）与 **Execution Harness**（各 target 内编排与可观测）拆开；本文中的 **`meta` 落库**对应「被测方通过评测接口把执行侧观测交给 Evaluation Harness」的那一段。
-- **列名 / 字段名与 SSOT 词面对齐**：
-  - SSOT 数据模型小节中可能出现的 **`eval_result.meta_json`** 泛指「上游 `meta` 快照」这一语义。
-  - 本仓库实现为 **`eval_result.target_meta_json`**（仅存响应根级 **`meta` 对象**）+ 既有 **`eval_result.debug_json`**（判分摘要，白名单清洗）。**未**在结果表默认落整段 `answer` / 全量 `sources`（与 SSOT「最小化采集、体积可控」方向一致；若将来与 SSOT 完全字面对齐，可在迁移中重命名列或增加视图，不改变 API 中 `meta`/`debug` 对外形状）。
-- **RAG 观测与 compare**：`eval-upgrade.md`「P0 推荐的 RAG 检索观测字段」与 Vagent 已提供字段对齐；本仓库通过 **`meta-trace-keys`** 选择进入 `*_meta_trace` 的子集，**travel-ai** 可配置自有键或留空，无需与 Vagent 同构。
+如果 target 的 `meta` 字段集合或字段语义发生变化，建议同步更新对应 target 的 `meta-trace-keys`，并补充一条脱敏 compare evidence，避免回归报告中的字段含义漂移。

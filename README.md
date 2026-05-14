@@ -1,8 +1,8 @@
 # vagent-eval
 
-`vagent-eval` is a rule-based Evaluation Harness for RAG / LLM applications. It imports fixed datasets, calls one or more target services through a stable eval API, evaluates responses with deterministic rules, stores run results, and generates reports or base/candidate comparisons.
+`vagent-eval` 是一个面向 RAG / LLM 应用的规则型 Evaluation Harness。它负责导入固定题集，按配置调用一个或多个被测服务，用确定性规则评估响应，把 run/result 落库，并生成 report 或 base/candidate compare 结果。
 
-This project is **not** an LLM-as-judge service. It is designed for repeatable regression checks around RAG behavior, citation constraints, low-confidence handling, tool expectations, and response contract compliance.
+本项目**不是** LLM-as-judge 服务：不会再调用一个大模型给答案质量打分。它更适合做可重复的回归评测，覆盖 RAG 行为、引用约束、低置信处理、工具调用期望和响应契约。
 
 ## Core Flow
 
@@ -10,11 +10,11 @@ This project is **not** an LLM-as-judge service. It is designed for repeatable r
 Dataset Import -> Target Call -> Rule Evaluation -> Result Store -> Report / Compare
 ```
 
-- **Dataset Import**: create datasets and import cases from JSONL or CSV.
-- **Target Call**: execute cases against configured targets via `POST /api/v1/eval/chat`.
-- **Rule Evaluation**: validate response contract, expected behavior, citations, membership evidence, low-confidence metadata, and tool outcomes.
-- **Result Store**: persist runs, results, audit events, datasets, and cases in PostgreSQL.
-- **Report / Compare**: generate single-run summaries, tag-bucket reports, and base/candidate regression diffs.
+- **Dataset Import**：创建 dataset，并从 JSONL 或 CSV 导入 case。
+- **Target Call**：通过 `POST /api/v1/eval/chat` 调用配置好的 target。
+- **Rule Evaluation**：校验响应契约、期望行为、引用、membership 证据、低置信 meta 和工具调用结果。
+- **Result Store**：将 dataset、case、run、result、audit event 持久化到 PostgreSQL。
+- **Report / Compare**：生成单次 run 报告、按 tag 分桶报告，以及 base/candidate 回归对比。
 
 ## Tech Stack
 
@@ -23,142 +23,80 @@ Dataset Import -> Target Call -> Rule Evaluation -> Result Store -> Report / Com
 - Spring Web / JDBC / Validation / Actuator
 - PostgreSQL
 - Flyway
-- Redis / Lettuce for optional run queue and quota coordination
+- Redis / Lettuce：可选的 run 队列和配额协调
 - Micrometer / Prometheus metrics
 - JUnit 5, Mockito, Spring Boot Test
 - GitHub Actions CI
 
 ## Implemented Features
 
-- Dataset management APIs with JSONL and CSV import.
-- Multi-target eval execution through configurable `eval.targets`.
-- Deterministic rule evaluation for RAG-style responses:
-  - response contract validation
-  - expected behavior matching
-  - citation presence checks
-  - hashed citation membership checks
-  - low-confidence reason checks
-  - tool expectation checks
-- PostgreSQL persistence for datasets, cases, runs, results, and audit events.
-- Flyway migrations for schema setup.
-- Report generation with pass rate, skipped rate, latency, error-code summary, and dataset slices.
-- Base/candidate compare API for regression review.
-- Optional Redis-backed run queue and global per-target run quota primitives.
-- Micrometer metrics for run creation, terminal states, case verdicts, target HTTP latency, and scheduling rejection.
-- CI workflow with PostgreSQL service and `mvn test`.
+- Dataset 管理 API，支持 JSONL 和 CSV 导入。
+- 基于 `eval.targets` 的多 target 评测执行。
+- 面向 RAG 响应的确定性规则评估：
+  - 响应契约校验
+  - expected behavior 匹配
+  - 引用存在性检查
+  - hashed citation membership 检查
+  - low-confidence reason 检查
+  - tool expectation 检查
+- PostgreSQL 持久化 dataset、case、run、result 和 audit event。
+- 使用 Flyway 管理数据库 schema。
+- 生成包含 pass rate、skipped rate、latency、error-code summary 和 dataset slices 的 report。
+- 提供 base/candidate compare API，用于回归差异查看。
+- 可选 Redis-backed run queue 和 per-target global run quota 基础能力。
+- Micrometer 指标覆盖 run 创建、终态、case verdict、target HTTP latency 和调度拒绝。
+- GitHub Actions 使用 PostgreSQL service 执行 `mvn test`。
 
-Redis queue/quota support has the foundational implementation and focused tests. Full pressure-test evidence for production-like quota behavior is still listed as follow-up work.
+Redis queue/quota 已有基础实现和针对性测试；完整的生产式压测和验收证据仍属于后续补充项。
 
 ## Quick Start
 
-Requirements:
+依赖：
 
 - JDK 21
-- Maven 3.9+ or the Windows Maven wrapper `mvnw.cmd`
-- PostgreSQL database named `eval` for integration tests and local persistence
+- Maven 3.9+，或 Windows Maven Wrapper `mvnw.cmd`
+- PostgreSQL，默认测试和本地持久化使用数据库 `eval`
 
-Run tests:
+运行测试：
 
 ```bash
 mvn test
 ```
 
-Start the service:
+启动服务：
 
 ```bash
 mvn spring-boot:run
 ```
 
-Windows without global Maven:
+Windows 无全局 Maven 时：
 
 ```powershell
 .\mvnw.cmd test
 .\mvnw.cmd spring-boot:run
 ```
 
-Health check:
+健康检查：
 
 ```bash
 curl http://localhost:8099/actuator/health
 ```
 
-Local secrets and target overrides should go into `src/main/resources/application-local.yml`, which is ignored by Git. Do not commit real tokens, gateway keys, salts, or private target URLs.
-
-## Environment Variables
-
-| Variable | Required | Purpose |
-| --- | --- | --- |
-| `EVAL_DEFAULT_EVAL_TOKEN` | Optional | Default token sent to target services as `X-Eval-Token` when a target-specific token is not configured. |
-| `EVAL_TRAVEL_AI_GATEWAY_KEY` | Optional | Gateway key sent as `X-Eval-Gateway-Key` for targets that require an eval gateway header. |
-| `EVAL_MEMBERSHIP_SALT` | Optional | Salt used by target-side membership evidence generation when supplied through deployment configuration. |
-| `SPRING_DATASOURCE_URL` | Local/CI | PostgreSQL JDBC URL, for example `jdbc:postgresql://localhost:5432/eval`. |
-| `SPRING_DATASOURCE_USERNAME` | Local/CI | PostgreSQL username. |
-| `SPRING_DATASOURCE_PASSWORD` | Local/CI | PostgreSQL password. |
-| `SPRING_DATA_REDIS_HOST` | Optional | Redis host when enabling Redis scheduling. |
-| `SPRING_DATA_REDIS_PORT` | Optional | Redis port when enabling Redis scheduling. |
-| `SPRING_DATA_REDIS_PASSWORD` | Optional | Redis password when needed. |
-
-See [`src/main/resources/application-example.yml`](src/main/resources/application-example.yml) for a sanitized configuration template.
-
-## Core APIs
-
-| Method | Path | Description |
-| --- | --- | --- |
-| `POST` | `/api/v1/eval/datasets` | Create a dataset. |
-| `GET` | `/api/v1/eval/datasets` | List datasets. |
-| `GET` | `/api/v1/eval/datasets/{dataset_id}` | Get dataset metadata. |
-| `DELETE` | `/api/v1/eval/datasets/{dataset_id}` | Delete a dataset and related runs/results. |
-| `GET` | `/api/v1/eval/datasets/{dataset_id}/cases` | List imported cases. |
-| `POST` | `/api/v1/eval/datasets/{dataset_id}/import` | Import JSONL or CSV cases. |
-| `POST` | `/api/v1/eval/runs` | Create and enqueue a run for a target. |
-| `GET` | `/api/v1/eval/runs` | List runs. |
-| `GET` | `/api/v1/eval/runs/{run_id}` | Get run status. |
-| `POST` | `/api/v1/eval/runs/{run_id}/cancel` | Request run cancellation. |
-| `GET` | `/api/v1/eval/runs/{run_id}/results` | List case results. |
-| `GET` | `/api/v1/eval/runs/{run_id}/report` | Generate a run report. |
-| `GET` | `/api/v1/eval/runs/{run_id}/report/buckets` | Generate tag-prefix bucket reports. |
-| `GET` | `/api/v1/eval/compare` | Compare base and candidate runs. |
-| `GET` | `/internal/eval/status` | Show sanitized runtime and target configuration summary. |
-
-The optional local probe endpoint `POST /api/v1/eval/chat` is for demos and contract testing only. Real evaluation runs still call configured target services.
-
-## Evaluation Rules
-
-The evaluator is deterministic and rule based. It checks whether the target response matches a known eval contract and expected case behavior.
-
-Important rule categories:
-
-- **Contract**: required fields and valid JSON shape.
-- **Behavior**: expected behavior such as answer, clarify, deny, or tool.
-- **Citations**: answer cases that require citations must provide valid sources.
-- **Citation membership**: cited source IDs must be present in target-provided retrieval evidence, preferably through hashed membership fields.
-- **Low confidence**: when `meta.low_confidence=true`, the response must provide non-empty `meta.low_confidence_reasons`.
-- **Tool path**: tool cases must show required, used, and succeeded tool state.
-- **Security boundary**: sensitive debug fields are only allowed in explicit eval-debug mode.
-
-This harness is useful for regression checks and behavior gates. It does not score answer quality with another model.
-
-## Evidence
-
-- End-to-end demo walkthrough: [`docs/evidence/eval-run-demo.md`](docs/evidence/eval-run-demo.md)
-- Sanitized sample report: [`docs/evidence/day10-report.sample.json`](docs/evidence/day10-report.sample.json)
-- Sanitized sample compare output: [`docs/evidence/day10-compare.sample.json`](docs/evidence/day10-compare.sample.json)
-- Target integration notes: [`docs/target-integration-meta-and-compare.md`](docs/target-integration-meta-and-compare.md)
-- GitHub Actions secrets guide: [`docs/github-actions-secrets.md`](docs/github-actions-secrets.md)
+本机 token、gateway key、私有 target 地址等覆盖配置应放在 `src/main/resources/application-local.yml`，该文件已被 Git 忽略。不要提交真实密钥、salt 或私有服务地址。
 
 ## Known Limitations
 
-- This is a rule-based regression harness, not semantic answer grading.
-- A run still calls the configured target service; it is not a fully offline model evaluator.
-- Local probe mode validates contracts and rules, but does not prove real RAG retrieval quality.
-- Redis queue/quota support has basic implementation and tests; complete pressure-test and acceptance evidence is still pending.
-- Test execution expects PostgreSQL to be available unless the test profile is adjusted.
-- Some admin/API security settings are intentionally configurable for local demos; production use should require token, network boundary, and HTTPS controls.
+- 这是规则型 regression harness，不是语义答案打分系统。
+- run 执行时仍会调用配置的 target 服务，不是完全离线的模型评测器。
+- 本地 probe mode 只能验证契约和规则链路，不能证明真实 RAG 检索质量。
+- Redis queue/quota 已有基础实现和测试，但完整压测和验收证据仍待补充。
+- 测试执行默认需要可用的 PostgreSQL，除非调整测试配置。
+- 部分管理 API 安全配置为了本地 demo 可开关；生产使用应收口 token、网络边界和 HTTPS。
 
 ## Roadmap
 
-- Add a concise architecture diagram.
-- Add Docker Compose for local PostgreSQL/Redis startup.
-- Expand Redis queue/quota pressure-test evidence.
-- Add OpenAPI documentation or generated API examples.
-- Improve CI artifacts for sanitized report and compare examples.
+- 补充简洁架构图。
+- 增加 Docker Compose，方便本地启动 PostgreSQL / Redis。
+- 补齐 Redis queue/quota 的压测和验收证据。
+- 增加 OpenAPI 文档或生成式 API 示例。
+- 改进 CI 产物，自动生成脱敏 report / compare 示例。

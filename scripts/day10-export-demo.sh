@@ -14,7 +14,7 @@
 # 环境变量：
 #   EVAL_BASE — 服务根 URL，默认 http://localhost:8099
 #
-# 详见：docs/day10-guide.md
+# 历史演示说明见：docs/archive/day10-guide.md
 #
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

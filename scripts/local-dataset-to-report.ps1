@@ -20,7 +20,7 @@
     powershell -ExecutionPolicy Bypass -File .\scripts\local-dataset-to-report.ps1
 
 .EXAMPLE
-    powershell -ExecutionPolicy Bypass -File .\scripts\local-dataset-to-report.ps1 -DatasetFile 'D:\Projects\Vagent\plans\datasets\p0-dataset-v0.jsonl' -TargetId vagent
+    powershell -ExecutionPolicy Bypass -File .\scripts\local-dataset-to-report.ps1 -DatasetFile '.\scripts\ci-datasets\p0-smoke.jsonl' -TargetId probe
 #>
 param(
     [string] $DatasetFile = '',

@@ -22,7 +22,7 @@
     产物：
       - out/day10-report.json、out/day10-compare.json（目录已在 .gitignore，勿当机密提交）
 
-    详见：docs/day10-guide.md
+    历史演示说明见：docs/archive/day10-guide.md
 #>
 $ErrorActionPreference = 'Stop'
 
