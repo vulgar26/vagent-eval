@@ -35,7 +35,12 @@ eval:
       eval-token: ""
       eval-gateway-key: ""
       enabled: false
-      meta-trace-keys: []
+      meta-trace-keys:
+        - workflow_id
+        - workflow_family
+        - policy_events
+        - tool_trace
+        - evidence_summary
 
   # 上游 meta 快照（eval_result.target_meta_json）；与 eval.runner.chat-mode 配合控制明文 hit id
   persistence:

@@ -93,6 +93,12 @@ eval:
         - tool_disabled_by_circuit_breaker
         - tool_rate_limited
         - tool_output_truncated
+        # Eval Contract V1 optional trace keys
+        - workflow_id
+        - workflow_family
+        - policy_events
+        - tool_trace
+        - evidence_summary
     - target-id: probe
       base-url: http://localhost:8099
       enabled: true
@@ -147,4 +153,3 @@ management:
 logging:
   level:
     com.vagent.eval.run.RunRunner: INFO
-

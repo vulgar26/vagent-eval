@@ -108,6 +108,8 @@ public class EvalChatContractValidator {
             }
 
             // P0+：若返回非空 hashed membership 证据，则须为 string[] 且每项为 64hex（小写）。空 [] 不校验（等同未提供）。
+            validateEvalContractV1OptionalMeta(meta, violations);
+
             JsonNode hashes = meta.get("retrieval_hit_id_hashes");
             if (hashes != null && !hashes.isNull()) {
                 if (!hashes.isArray()) {
@@ -142,5 +144,64 @@ public class EvalChatContractValidator {
             return ContractOutcome.fail(ErrorCode.CONTRACT_VIOLATION, violations);
         }
         return ContractOutcome.pass();
+    }
+
+    private static void validateEvalContractV1OptionalMeta(JsonNode meta, List<String> violations) {
+        JsonNode contractVersion = meta.get("contract_version");
+        if (contractVersion != null && !contractVersion.isNull() && !contractVersion.isTextual()) {
+            violations.add("meta_contract_version_must_be_string");
+        }
+        JsonNode workflowId = meta.get("workflow_id");
+        if (workflowId != null && !workflowId.isNull() && !workflowId.isTextual()) {
+            violations.add("meta_workflow_id_must_be_string");
+        }
+        JsonNode workflowVersion = meta.get("workflow_version");
+        if (workflowVersion != null && !workflowVersion.isNull() && !workflowVersion.isTextual()) {
+            violations.add("meta_workflow_version_must_be_string");
+        }
+        JsonNode workflowFamily = meta.get("workflow_family");
+        if (workflowFamily != null && !workflowFamily.isNull() && !workflowFamily.isTextual()) {
+            violations.add("meta_workflow_family_must_be_string");
+        }
+
+        JsonNode policyEvents = meta.get("policy_events");
+        if (policyEvents != null && !policyEvents.isNull()) {
+            if (!policyEvents.isArray()) {
+                violations.add("meta_policy_events_must_be_array");
+            } else {
+                validatePolicyEventAttrs(policyEvents, violations);
+            }
+        }
+
+        JsonNode stageTrace = meta.get("stage_trace");
+        if (stageTrace != null && !stageTrace.isNull() && !stageTrace.isArray()) {
+            violations.add("meta_stage_trace_must_be_array");
+        }
+        JsonNode toolTrace = meta.get("tool_trace");
+        if (toolTrace != null && !toolTrace.isNull() && !toolTrace.isArray()) {
+            violations.add("meta_tool_trace_must_be_array");
+        }
+        JsonNode evidenceSummary = meta.get("evidence_summary");
+        if (evidenceSummary != null && !evidenceSummary.isNull() && !evidenceSummary.isObject()) {
+            violations.add("meta_evidence_summary_must_be_object");
+        }
+    }
+
+    private static void validatePolicyEventAttrs(JsonNode policyEvents, List<String> violations) {
+        for (int i = 0; i < policyEvents.size(); i++) {
+            JsonNode event = policyEvents.get(i);
+            if (event == null || event.isNull()) {
+                continue;
+            }
+            if (!event.isObject()) {
+                violations.add("meta_policy_events_items_must_be_objects");
+                return;
+            }
+            JsonNode attrs = event.get("attrs");
+            if (attrs != null && !attrs.isNull() && !attrs.isObject()) {
+                violations.add("meta_policy_events_attrs_must_be_object");
+                return;
+            }
+        }
     }
 }

@@ -159,6 +159,10 @@ public class RunReportService {
         m.put("p95_latency_ms", p95);
         m.put("error_code_top_n", topN);
         m.put("error_code_counts", errorTop);
+        List<Map<String, Object>> workflowSummary = workflowSummary(results);
+        if (!workflowSummary.isEmpty()) {
+            m.put("workflow_summary", workflowSummary);
+        }
         List<Map<String, Object>> byEb = null;
         List<Map<String, Object>> byRc = null;
         List<Map<String, Object>> byCross = null;
@@ -174,6 +178,92 @@ public class RunReportService {
         }
         m.put("markdown_summary", buildMarkdownSummary(run.runId(), passRate, skippedRate, p95, errorTop, byEb, byRc, byCross));
         return m;
+    }
+
+    static List<Map<String, Object>> workflowSummary(List<EvalResult> results) {
+        Map<String, WorkflowBucket> buckets = new LinkedHashMap<>();
+        for (EvalResult r : results) {
+            String workflowId = nonBlankString(metaValue(r, "workflow_id"));
+            if (workflowId == null) {
+                continue;
+            }
+            WorkflowBucket bucket = buckets.computeIfAbsent(workflowId, WorkflowBucket::new);
+            String workflowFamily = nonBlankString(metaValue(r, "workflow_family"));
+            if (bucket.workflowFamily == null && workflowFamily != null) {
+                bucket.workflowFamily = workflowFamily;
+            }
+            bucket.add(r.verdict());
+        }
+
+        List<WorkflowBucket> sorted = new ArrayList<>(buckets.values());
+        sorted.sort(Comparator
+                .comparingInt(WorkflowBucket::resultsCount).reversed()
+                .thenComparing(WorkflowBucket::workflowId));
+
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (WorkflowBucket bucket : sorted) {
+            out.add(bucket.toRow());
+        }
+        return out;
+    }
+
+    private static Object metaValue(EvalResult result, String key) {
+        Map<String, Object> meta = result.meta();
+        if (meta == null) {
+            return null;
+        }
+        return meta.get(key);
+    }
+
+    private static String nonBlankString(Object value) {
+        if (!(value instanceof String s)) {
+            return null;
+        }
+        String trimmed = s.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private static final class WorkflowBucket {
+        private final String workflowId;
+        private String workflowFamily;
+        private int passCount;
+        private int skippedCount;
+        private int failCount;
+
+        private WorkflowBucket(String workflowId) {
+            this.workflowId = workflowId;
+        }
+
+        private String workflowId() {
+            return workflowId;
+        }
+
+        private int resultsCount() {
+            return passCount + skippedCount + failCount;
+        }
+
+        private void add(Verdict verdict) {
+            if (verdict == Verdict.PASS) {
+                passCount++;
+            } else if (verdict == Verdict.SKIPPED_UNSUPPORTED) {
+                skippedCount++;
+            } else {
+                failCount++;
+            }
+        }
+
+        private Map<String, Object> toRow() {
+            int resultsCount = resultsCount();
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("workflow_id", workflowId);
+            row.put("workflow_family", workflowFamily);
+            row.put("results_count", resultsCount);
+            row.put("pass_count", passCount);
+            row.put("fail_count", failCount);
+            row.put("skipped_count", skippedCount);
+            row.put("pass_rate", resultsCount > 0 ? passCount / (double) resultsCount : null);
+            return row;
+        }
     }
 
     static Map<String, EvalResult> indexResultsByCaseId(List<EvalResult> results) {

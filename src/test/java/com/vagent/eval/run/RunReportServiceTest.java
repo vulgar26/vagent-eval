@@ -10,6 +10,7 @@ import com.vagent.eval.run.RunModel.Verdict;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -37,6 +38,16 @@ class RunReportServiceTest {
 
     private static EvalResult row(Verdict v, ErrorCode ec, long latencyMs) {
         return new EvalResult("run_x", "ds", "probe", "c", v, ec, latencyMs, Instant.now(), null, Map.of());
+    }
+
+    private static EvalResult rowMeta(String caseId, Verdict v, Map<String, Object> meta) {
+        return new EvalResult("run_x", "ds", "probe", caseId, v, null, 10, Instant.now(), null, meta);
+    }
+
+    private static Map<String, Object> nullWorkflowIdMeta() {
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("workflow_id", null);
+        return meta;
     }
 
     private static EvalResult rowCase(String caseId, Verdict v, ErrorCode ec, long latencyMs) {
@@ -70,6 +81,81 @@ class RunReportServiceTest {
         assertThat(rep.get("skipped_rate")).isNull();
         assertThat(rep.get("p95_latency_ms")).isNull();
         assertThat(rep.get("latency_sample_count")).isEqualTo(0);
+    }
+
+    @Test
+    void workflowSummary_absentWhenNoWorkflowMeta() {
+        List<EvalResult> results = List.of(
+                row(Verdict.PASS, null, 10),
+                row(Verdict.FAIL, ErrorCode.BEHAVIOR_MISMATCH, 10)
+        );
+        Map<String, Object> rep = RunReportService.computeReport(run("run_x", 2, 2), results, 5);
+        assertThat(rep).doesNotContainKey("workflow_summary");
+        assertThat(rep.get("pass_count")).isEqualTo(1);
+        assertThat(rep.get("fail_count")).isEqualTo(1);
+        assertThat(rep.get("pass_rate")).isEqualTo(0.5);
+    }
+
+    @Test
+    void workflowSummary_groupsByWorkflowId() {
+        List<EvalResult> results = List.of(
+                rowMeta("c1", Verdict.PASS, Map.of("workflow_id", "market_data_explain", "workflow_family", "finance")),
+                rowMeta("c2", Verdict.PASS, Map.of("workflow_id", "market_data_explain", "workflow_family", "finance")),
+                rowMeta("c3", Verdict.FAIL, Map.of("workflow_id", "market_data_explain", "workflow_family", "finance")),
+                rowMeta("c4", Verdict.PASS, Map.of("workflow_id", "company_snapshot", "workflow_family", "finance"))
+        );
+        Map<String, Object> rep = RunReportService.computeReport(run("run_x", 4, 4), results, 5);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> summary = (List<Map<String, Object>>) rep.get("workflow_summary");
+        assertThat(summary).hasSize(2);
+
+        Map<String, Object> market = summary.get(0);
+        assertThat(market.get("workflow_id")).isEqualTo("market_data_explain");
+        assertThat(market.get("workflow_family")).isEqualTo("finance");
+        assertThat(market.get("results_count")).isEqualTo(3);
+        assertThat(market.get("pass_count")).isEqualTo(2);
+        assertThat(market.get("fail_count")).isEqualTo(1);
+        assertThat(market.get("skipped_count")).isEqualTo(0);
+        assertThat(market.get("pass_rate")).isEqualTo(2 / 3.0);
+
+        Map<String, Object> company = summary.get(1);
+        assertThat(company.get("workflow_id")).isEqualTo("company_snapshot");
+        assertThat(company.get("workflow_family")).isEqualTo("finance");
+        assertThat(company.get("results_count")).isEqualTo(1);
+        assertThat(company.get("pass_count")).isEqualTo(1);
+        assertThat(company.get("fail_count")).isEqualTo(0);
+        assertThat(company.get("skipped_count")).isEqualTo(0);
+        assertThat(company.get("pass_rate")).isEqualTo(1.0);
+
+        assertThat(rep.get("results_count")).isEqualTo(4);
+        assertThat(rep.get("pass_count")).isEqualTo(3);
+        assertThat(rep.get("fail_count")).isEqualTo(1);
+        assertThat(rep.get("pass_rate")).isEqualTo(0.75);
+    }
+
+    @Test
+    void workflowSummary_ignoresNonStringOrBlankWorkflowId() {
+        List<EvalResult> results = List.of(
+                rowMeta("c1", Verdict.PASS, Map.of("workflow_id", 123)),
+                rowMeta("c2", Verdict.PASS, Map.of("workflow_id", "   ")),
+                rowMeta("c3", Verdict.PASS, nullWorkflowIdMeta()),
+                rowMeta("c4", Verdict.PASS, Map.of("workflow_id", "valid_flow", "workflow_family", 123)),
+                rowMeta("c5", Verdict.SKIPPED_UNSUPPORTED, Map.of("workflow_id", "valid_flow"))
+        );
+        Map<String, Object> rep = RunReportService.computeReport(run("run_x", 5, 5), results, 5);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> summary = (List<Map<String, Object>>) rep.get("workflow_summary");
+        assertThat(summary).hasSize(1);
+        Map<String, Object> valid = summary.get(0);
+        assertThat(valid.get("workflow_id")).isEqualTo("valid_flow");
+        assertThat(valid.get("workflow_family")).isNull();
+        assertThat(valid.get("results_count")).isEqualTo(2);
+        assertThat(valid.get("pass_count")).isEqualTo(1);
+        assertThat(valid.get("fail_count")).isEqualTo(0);
+        assertThat(valid.get("skipped_count")).isEqualTo(1);
+        assertThat(valid.get("pass_rate")).isEqualTo(0.5);
     }
 
     @Test
