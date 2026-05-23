@@ -159,6 +159,91 @@ class RunReportServiceTest {
     }
 
     @Test
+    void policyEventSummary_countsPolicyTypes() {
+        List<EvalResult> results = List.of(
+                rowMeta("c1", Verdict.PASS, Map.of("policy_events", List.of(
+                        Map.of("policy_type", "finance_guard"),
+                        Map.of("policy_type", "citation_guard")
+                ))),
+                rowMeta("c2", Verdict.FAIL, Map.of("policy_events", List.of(
+                        Map.of("policy_type", "finance_guard")
+                )))
+        );
+        Map<String, Object> rep = RunReportService.computeReport(run("run_x", 2, 2), results, 5);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> summary = (List<Map<String, Object>>) rep.get("policy_event_summary");
+        assertThat(summary).containsExactly(
+                Map.of("policy_type", "citation_guard", "count", 1),
+                Map.of("policy_type", "finance_guard", "count", 2)
+        );
+        assertThat(rep).doesNotContainKey("tool_trace_summary");
+    }
+
+    @Test
+    void toolTraceSummary_countsToolOutcomes() {
+        List<EvalResult> results = List.of(
+                rowMeta("c1", Verdict.PASS, Map.of("tool_trace", List.of(
+                        Map.of("tool_name", "market_data", "outcome", "ok"),
+                        Map.of("tool_name", "market_data", "outcome", "timeout")
+                ))),
+                rowMeta("c2", Verdict.FAIL, Map.of("tool_trace", List.of(
+                        Map.of("tool_name", "market_data", "outcome", "ok"),
+                        Map.of("tool_name", "profile", "outcome", "ok")
+                )))
+        );
+        Map<String, Object> rep = RunReportService.computeReport(run("run_x", 2, 2), results, 5);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> summary = (List<Map<String, Object>>) rep.get("tool_trace_summary");
+        assertThat(summary).containsExactly(
+                Map.of("tool_name", "market_data", "outcome", "ok", "count", 2),
+                Map.of("tool_name", "market_data", "outcome", "timeout", "count", 1),
+                Map.of("tool_name", "profile", "outcome", "ok", "count", 1)
+        );
+        assertThat(rep).doesNotContainKey("policy_event_summary");
+    }
+
+    @Test
+    void summaries_ignoreMalformedMeta() {
+        List<EvalResult> results = List.of(
+                rowMeta("c1", Verdict.PASS, Map.of("policy_events", "not_array", "tool_trace", "not_array")),
+                rowMeta("c2", Verdict.PASS, Map.of(
+                        "policy_events", List.of("not_object", Map.of("policy_type", 123), Map.of("policy_type", " ")),
+                        "tool_trace", List.of("not_object", Map.of("tool_name", "market_data"), Map.of("outcome", "ok"), Map.of("tool_name", 123, "outcome", "ok"))
+                )),
+                rowMeta("c3", Verdict.PASS, Map.of(
+                        "policy_events", List.of(Map.of("policy_type", "finance_guard")),
+                        "tool_trace", List.of(Map.of("tool_name", "market_data", "outcome", "ok"))
+                ))
+        );
+        Map<String, Object> rep = RunReportService.computeReport(run("run_x", 3, 3), results, 5);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> policySummary = (List<Map<String, Object>>) rep.get("policy_event_summary");
+        assertThat(policySummary).containsExactly(Map.of("policy_type", "finance_guard", "count", 1));
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> toolSummary = (List<Map<String, Object>>) rep.get("tool_trace_summary");
+        assertThat(toolSummary).containsExactly(Map.of("tool_name", "market_data", "outcome", "ok", "count", 1));
+    }
+
+    @Test
+    void oldReport_noTraceFields_noNewSummary() {
+        List<EvalResult> results = List.of(
+                row(Verdict.PASS, null, 10),
+                row(Verdict.FAIL, ErrorCode.BEHAVIOR_MISMATCH, 10)
+        );
+        Map<String, Object> rep = RunReportService.computeReport(run("run_x", 2, 2), results, 5);
+        assertThat(rep).doesNotContainKey("policy_event_summary");
+        assertThat(rep).doesNotContainKey("tool_trace_summary");
+        assertThat(rep).doesNotContainKey("workflow_summary");
+        assertThat(rep.get("pass_count")).isEqualTo(1);
+        assertThat(rep.get("fail_count")).isEqualTo(1);
+        assertThat(rep.get("pass_rate")).isEqualTo(0.5);
+    }
+
+    @Test
     void p95NearestRank_fourSamples() {
         assertThat(RunReportService.p95NearestRank(List.of(10L, 20L, 30L, 40L))).isEqualTo(40L);
         assertThat(RunReportService.p95NearestRank(List.of(100L))).isEqualTo(100L);

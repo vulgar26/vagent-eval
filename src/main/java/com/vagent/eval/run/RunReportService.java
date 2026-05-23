@@ -163,6 +163,14 @@ public class RunReportService {
         if (!workflowSummary.isEmpty()) {
             m.put("workflow_summary", workflowSummary);
         }
+        List<Map<String, Object>> policyEventSummary = policyEventSummary(results);
+        if (!policyEventSummary.isEmpty()) {
+            m.put("policy_event_summary", policyEventSummary);
+        }
+        List<Map<String, Object>> toolTraceSummary = toolTraceSummary(results);
+        if (!toolTraceSummary.isEmpty()) {
+            m.put("tool_trace_summary", toolTraceSummary);
+        }
         List<Map<String, Object>> byEb = null;
         List<Map<String, Object>> byRc = null;
         List<Map<String, Object>> byCross = null;
@@ -203,6 +211,73 @@ public class RunReportService {
         List<Map<String, Object>> out = new ArrayList<>();
         for (WorkflowBucket bucket : sorted) {
             out.add(bucket.toRow());
+        }
+        return out;
+    }
+
+    static List<Map<String, Object>> policyEventSummary(List<EvalResult> results) {
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        for (EvalResult r : results) {
+            Object events = metaValue(r, "policy_events");
+            if (!(events instanceof List<?> list)) {
+                continue;
+            }
+            for (Object item : list) {
+                if (!(item instanceof Map<?, ?> event)) {
+                    continue;
+                }
+                String policyType = nonBlankString(event.get("policy_type"));
+                if (policyType == null) {
+                    continue;
+                }
+                counts.merge(policyType, 1, Integer::sum);
+            }
+        }
+        List<Map.Entry<String, Integer>> sorted = new ArrayList<>(counts.entrySet());
+        sorted.sort(Map.Entry.comparingByKey());
+
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Map.Entry<String, Integer> e : sorted) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("policy_type", e.getKey());
+            row.put("count", e.getValue());
+            out.add(row);
+        }
+        return out;
+    }
+
+    static List<Map<String, Object>> toolTraceSummary(List<EvalResult> results) {
+        Map<ToolTraceKey, Integer> counts = new LinkedHashMap<>();
+        for (EvalResult r : results) {
+            Object traces = metaValue(r, "tool_trace");
+            if (!(traces instanceof List<?> list)) {
+                continue;
+            }
+            for (Object item : list) {
+                if (!(item instanceof Map<?, ?> trace)) {
+                    continue;
+                }
+                String toolName = nonBlankString(trace.get("tool_name"));
+                String outcome = nonBlankString(trace.get("outcome"));
+                if (toolName == null || outcome == null) {
+                    continue;
+                }
+                counts.merge(new ToolTraceKey(toolName, outcome), 1, Integer::sum);
+            }
+        }
+        List<Map.Entry<ToolTraceKey, Integer>> sorted = new ArrayList<>(counts.entrySet());
+        sorted.sort(Map.Entry
+                .<ToolTraceKey, Integer>comparingByKey(Comparator
+                        .comparing(ToolTraceKey::toolName)
+                        .thenComparing(ToolTraceKey::outcome)));
+
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Map.Entry<ToolTraceKey, Integer> e : sorted) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("tool_name", e.getKey().toolName());
+            row.put("outcome", e.getKey().outcome());
+            row.put("count", e.getValue());
+            out.add(row);
         }
         return out;
     }
@@ -264,6 +339,9 @@ public class RunReportService {
             row.put("pass_rate", resultsCount > 0 ? passCount / (double) resultsCount : null);
             return row;
         }
+    }
+
+    private record ToolTraceKey(String toolName, String outcome) {
     }
 
     static Map<String, EvalResult> indexResultsByCaseId(List<EvalResult> results) {
