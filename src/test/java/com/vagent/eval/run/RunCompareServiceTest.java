@@ -37,6 +37,19 @@ class RunCompareServiceTest {
         return new EvalResult("run_x", "ds1", "probe", caseId, v, ec, 10L, Instant.now(), null, Map.of());
     }
 
+    private static EvalResult rowMeta(String runId, String caseId, Verdict v, ErrorCode ec, Map<String, Object> meta) {
+        return new EvalResult(runId, "ds1", "probe", caseId, v, ec, 10L, Instant.now(), meta, Map.of());
+    }
+
+    private static EvalProperties propertiesWithMetaTraceKeys(String... keys) {
+        EvalProperties p = new EvalProperties();
+        EvalProperties.TargetConfig probeTarget = new EvalProperties.TargetConfig();
+        probeTarget.setTargetId("probe");
+        probeTarget.setMetaTraceKeys(List.of(keys));
+        p.setTargets(List.of(probeTarget));
+        return p;
+    }
+
     @Test
     void resultsPath_encodesCaseId() {
         assertThat(RunCompareService.resultsPath("run_a", "a/b"))
@@ -117,5 +130,123 @@ class RunCompareServiceTest {
         assertThat(baseTrace).containsOnlyKeys("retrieve_hit_count", "custom_travel_metric");
         assertThat(baseTrace.get("retrieve_hit_count")).isEqualTo(3);
         assertThat(baseTrace.get("custom_travel_metric")).isEqualTo("ignored_in_probe_samples");
+    }
+
+    @Test
+    void metaTraceDiff_reportsChangedWorkflowId() {
+        EvalProperties p = propertiesWithMetaTraceKeys("workflow_id");
+        EvalResult br = rowMeta("run_b", "c1", Verdict.PASS, null,
+                Map.of("workflow_id", "market_data_explain"));
+        EvalResult cr = rowMeta("run_c", "c1", Verdict.FAIL, ErrorCode.TIMEOUT,
+                Map.of("workflow_id", "market_data_explain_v2"));
+
+        Map<String, Object> out = RunCompareService.compareRuns(
+                "run_b", "run_c",
+                run("run_b", "ds1", 1, 1), List.of(br),
+                run("run_c", "ds1", 1, 1), List.of(cr),
+                p);
+
+        Map<String, Object> diff = firstRegressionMetaTraceDiff(out);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> workflow = (Map<String, Object>) diff.get("workflow_id");
+        assertThat(workflow.get("base")).isEqualTo("market_data_explain");
+        assertThat(workflow.get("cand")).isEqualTo("market_data_explain_v2");
+    }
+
+    @Test
+    void metaTraceDiff_omitsEqualValues() {
+        EvalProperties p = propertiesWithMetaTraceKeys("workflow_id");
+        EvalResult br = rowMeta("run_b", "c1", Verdict.PASS, null,
+                Map.of("workflow_id", "market_data_explain"));
+        EvalResult cr = rowMeta("run_c", "c1", Verdict.FAIL, ErrorCode.TIMEOUT,
+                Map.of("workflow_id", "market_data_explain"));
+
+        Map<String, Object> out = RunCompareService.compareRuns(
+                "run_b", "run_c",
+                run("run_b", "ds1", 1, 1), List.of(br),
+                run("run_c", "ds1", 1, 1), List.of(cr),
+                p);
+
+        assertThat(firstRegression(out)).doesNotContainKey("meta_trace_diff");
+    }
+
+    @Test
+    void metaTraceDiff_ignoresMissingTraceKeys() {
+        EvalProperties p = propertiesWithMetaTraceKeys("workflow_family");
+        EvalResult br = rowMeta("run_b", "c1", Verdict.PASS, null,
+                Map.of("workflow_id", "market_data_explain"));
+        EvalResult cr = rowMeta("run_c", "c1", Verdict.FAIL, ErrorCode.TIMEOUT,
+                Map.of("workflow_id", "market_data_explain_v2"));
+
+        Map<String, Object> out = RunCompareService.compareRuns(
+                "run_b", "run_c",
+                run("run_b", "ds1", 1, 1), List.of(br),
+                run("run_c", "ds1", 1, 1), List.of(cr),
+                p);
+
+        Map<String, Object> row = firstRegression(out);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> baseTrace = (Map<String, Object>) row.get("base_meta_trace");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> candTrace = (Map<String, Object>) row.get("cand_meta_trace");
+        assertThat(baseTrace).doesNotContainKey("workflow_id");
+        assertThat(candTrace).doesNotContainKey("workflow_id");
+        assertThat(row).doesNotContainKey("meta_trace_diff");
+    }
+
+    @Test
+    void metaTraceDiff_reportsMissingOnOneSide() {
+        EvalProperties p = propertiesWithMetaTraceKeys("workflow_id");
+        EvalResult br = rowMeta("run_b", "c1", Verdict.PASS, null,
+                Map.of("workflow_id", "market_data_explain"));
+        EvalResult cr = rowMeta("run_c", "c1", Verdict.FAIL, ErrorCode.TIMEOUT, Map.of());
+
+        Map<String, Object> out = RunCompareService.compareRuns(
+                "run_b", "run_c",
+                run("run_b", "ds1", 1, 1), List.of(br),
+                run("run_c", "ds1", 1, 1), List.of(cr),
+                p);
+
+        Map<String, Object> diff = firstRegressionMetaTraceDiff(out);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> workflow = (Map<String, Object>) diff.get("workflow_id");
+        assertThat(workflow.get("base")).isEqualTo("market_data_explain");
+        assertThat(workflow).containsEntry("cand", null);
+    }
+
+    @Test
+    void metaTraceDiff_handlesArrayOrObjectValues() {
+        EvalProperties p = propertiesWithMetaTraceKeys("tool_trace", "evidence_summary");
+        EvalResult br = rowMeta("run_b", "c1", Verdict.PASS, null, Map.of(
+                "tool_trace", List.of(Map.of("tool_name", "market_data", "outcome", "ok")),
+                "evidence_summary", Map.of("source_count", 1)
+        ));
+        EvalResult cr = rowMeta("run_c", "c1", Verdict.FAIL, ErrorCode.TIMEOUT, Map.of(
+                "tool_trace", List.of(Map.of("tool_name", "market_data", "outcome", "timeout")),
+                "evidence_summary", Map.of("source_count", 1)
+        ));
+
+        Map<String, Object> out = RunCompareService.compareRuns(
+                "run_b", "run_c",
+                run("run_b", "ds1", 1, 1), List.of(br),
+                run("run_c", "ds1", 1, 1), List.of(cr),
+                p);
+
+        Map<String, Object> diff = firstRegressionMetaTraceDiff(out);
+        assertThat(diff).containsOnlyKeys("tool_trace");
+    }
+
+    private static Map<String, Object> firstRegression(Map<String, Object> out) {
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> regressions = (List<Map<String, Object>>) out.get("regressions");
+        assertThat(regressions).hasSize(1);
+        return regressions.get(0);
+    }
+
+    private static Map<String, Object> firstRegressionMetaTraceDiff(Map<String, Object> out) {
+        @SuppressWarnings("unchecked")
+        Map<String, Object> diff = (Map<String, Object>) firstRegression(out).get("meta_trace_diff");
+        assertThat(diff).isNotNull();
+        return diff;
     }
 }

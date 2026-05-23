@@ -13,6 +13,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
 
@@ -202,11 +203,40 @@ public class RunCompareService {
         row.put("cand_verdict", cr.verdict().name());
         row.put("base_error_code", br.errorCode() == null ? null : br.errorCode().name());
         row.put("cand_error_code", cr.errorCode() == null ? null : cr.errorCode().name());
-        row.put("base_meta_trace", metaTracePreview(br, evalProperties));
-        row.put("cand_meta_trace", metaTracePreview(cr, evalProperties));
+        Map<String, Object> baseMetaTrace = metaTracePreview(br, evalProperties);
+        Map<String, Object> candMetaTrace = metaTracePreview(cr, evalProperties);
+        row.put("base_meta_trace", baseMetaTrace);
+        row.put("cand_meta_trace", candMetaTrace);
+        Map<String, Object> metaTraceDiff = metaTraceDiff(baseMetaTrace, candMetaTrace);
+        if (!metaTraceDiff.isEmpty()) {
+            row.put("meta_trace_diff", metaTraceDiff);
+        }
         row.put("cand_results_path", resultsPath(candRunId, caseId));
         row.put("base_results_path", resultsPath(baseRunId, caseId));
         return row;
+    }
+
+    static Map<String, Object> metaTraceDiff(Map<String, Object> baseMetaTrace, Map<String, Object> candMetaTrace) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        Set<String> keys = new TreeSet<>();
+        if (baseMetaTrace != null) {
+            keys.addAll(baseMetaTrace.keySet());
+        }
+        if (candMetaTrace != null) {
+            keys.addAll(candMetaTrace.keySet());
+        }
+        for (String key : keys) {
+            Object baseValue = baseMetaTrace == null ? null : baseMetaTrace.get(key);
+            Object candValue = candMetaTrace == null ? null : candMetaTrace.get(key);
+            if (Objects.equals(baseValue, candValue)) {
+                continue;
+            }
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("base", baseValue);
+            row.put("cand", candValue);
+            out.put(key, row);
+        }
+        return out;
     }
 
     /**
