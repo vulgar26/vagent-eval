@@ -584,6 +584,12 @@ public class RunReportService {
                 body.append(formatSliceMarkdownLine(slice, "requires_citations"));
             }
         }
+        if (byBehaviorAndCitations != null && !byBehaviorAndCitations.isEmpty()) {
+            body.append(String.format("%n%n## slices expected_behavior x requires_citations (%s)%n", SLICES_VERSION));
+            for (Map<String, Object> slice : byBehaviorAndCitations) {
+                body.append(formatCrossSliceMarkdownLine(slice));
+            }
+        }
         return body.toString();
     }
 

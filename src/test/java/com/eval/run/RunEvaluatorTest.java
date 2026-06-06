@@ -252,6 +252,13 @@ class RunEvaluatorTest {
     @Test
     void citations_requiresCitations_answer_sourcesProvided_enforcesMembership() throws Exception {
         RunEvaluator evaluator = new RunEvaluator(new EvalChatContractValidator(), props("s", 8));
+        String token = "test-token";
+        String targetId = "vagent";
+        String datasetId = "ds";
+        String caseId = "s167c";
+        String hash = CitationMembership.hitIdHashHexV1(
+                CitationMembership.deriveCaseKeyV1(token, targetId, datasetId, caseId),
+                CitationMembership.canonicalChunkId("chunk_a"));
         String json = """
                 {
                   "answer": "no",
@@ -261,21 +268,21 @@ class RunEvaluatorTest {
                     "retrieval": {"supported": true, "score": false},
                     "tools": {"supported": false, "outcome": false}
                   },
-                  "meta": {"mode": "EVAL"},
+                  "meta": {"mode": "EVAL", "retrieval_hit_id_hashes": ["%s"]},
                   "retrieval_hits": [{"id": "chunk_a", "title": "t", "snippet": "s"}],
                   "sources": [{"id": "chunk_a", "title": "t", "snippet": "s"}]
                 }
-                """;
+                """.formatted(hash);
         EvalCase c = new EvalCase(
-                "s167c",
-                "ds",
+                caseId,
+                datasetId,
                 "Q",
                 EvalExpectedBehavior.ANSWER,
                 true,
                 List.of(),
                 Instant.parse("2026-04-10T00:00:00Z")
         );
-        EvalOutcome o = evaluator.evaluate(c, om.readTree(json), "vagent");
+        EvalOutcome o = evaluator.evaluate(c, om.readTree(json), targetId);
         assertThat(o.verdict()).isEqualTo(Verdict.PASS);
         assertThat(o.errorCode()).isNull();
     }
@@ -465,6 +472,13 @@ class RunEvaluatorTest {
     @Test
     void citations_answer_lowConfidenceTrue_withReasons_passesMembership() throws Exception {
         RunEvaluator evaluator = new RunEvaluator(new EvalChatContractValidator(), props("s", 8));
+        String token = "test-token";
+        String targetId = "vagent";
+        String datasetId = "ds";
+        String caseId = "lc2";
+        String hash = CitationMembership.hitIdHashHexV1(
+                CitationMembership.deriveCaseKeyV1(token, targetId, datasetId, caseId),
+                CitationMembership.canonicalChunkId("chunk_a"));
         String json = """
                 {
                   "answer": "a",
@@ -474,21 +488,21 @@ class RunEvaluatorTest {
                     "retrieval": {"supported": true, "score": false},
                     "tools": {"supported": false, "outcome": false}
                   },
-                  "meta": {"mode": "EVAL", "low_confidence": true, "low_confidence_reasons": ["weak_lexical"]},
+                  "meta": {"mode": "EVAL", "low_confidence": true, "low_confidence_reasons": ["weak_lexical"], "retrieval_hit_id_hashes": ["%s"]},
                   "retrieval_hits": [{"id": "chunk_a", "title": "t", "snippet": "s"}],
                   "sources": [{"id": "chunk_a", "title": "t", "snippet": "s"}]
                 }
-                """;
+                """.formatted(hash);
         EvalCase c = new EvalCase(
-                "lc2",
-                "ds",
+                caseId,
+                datasetId,
                 "Q",
                 EvalExpectedBehavior.ANSWER,
                 true,
                 List.of(),
                 Instant.parse("2026-04-10T00:00:00Z")
         );
-        EvalOutcome o = evaluator.evaluate(c, om.readTree(json), "vagent");
+        EvalOutcome o = evaluator.evaluate(c, om.readTree(json), targetId);
         assertThat(o.verdict()).isEqualTo(Verdict.PASS);
         assertThat(o.errorCode()).isNull();
     }

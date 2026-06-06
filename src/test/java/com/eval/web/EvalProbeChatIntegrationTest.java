@@ -51,6 +51,7 @@ class EvalProbeChatIntegrationTest {
         mockMvc.perform(post("/api/v1/eval/chat")
                         .contentType(MediaType.APPLICATION_JSON)
                         .header(TargetClient.HDR_MEMBERSHIP_TOP_N, "8")
+                        .header("X-Eval-Token", "test-token")
                         .content("{\"query\":\"CITATIONS_OK\",\"mode\":\"EVAL\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.capabilities.retrieval.supported").value(true))
@@ -62,6 +63,7 @@ class EvalProbeChatIntegrationTest {
     void probeCitationsBadMemberReturnsMismatchedSource() throws Exception {
         mockMvc.perform(post("/api/v1/eval/chat")
                         .contentType(MediaType.APPLICATION_JSON)
+                        .header("X-Eval-Token", "test-token")
                         .content("{\"query\":\"CITATIONS_BAD_MEMBER\",\"mode\":\"EVAL\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.retrieval_hits[0].id").value("only_hit"))

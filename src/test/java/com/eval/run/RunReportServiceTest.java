@@ -41,7 +41,7 @@ class RunReportServiceTest {
     }
 
     private static EvalResult rowMeta(String caseId, Verdict v, Map<String, Object> meta) {
-        return new EvalResult("run_x", "ds", "probe", caseId, v, null, 10, Instant.now(), null, meta);
+        return new EvalResult("run_x", "ds", "probe", caseId, v, null, 10, Instant.now(), meta, Map.of());
     }
 
     private static Map<String, Object> nullWorkflowIdMeta() {
