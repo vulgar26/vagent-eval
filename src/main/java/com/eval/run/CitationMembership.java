@@ -123,7 +123,11 @@ public final class CitationMembership {
     static byte[] hmacSha256(byte[] key, byte[] msg) {
         try {
             Mac mac = Mac.getInstance("HmacSHA256");
-            mac.init(new SecretKeySpec(key == null ? new byte[0] : key, "HmacSHA256"));
+            // JCE 的 Mac.init 拒绝空 key（抛 IllegalArgumentException: Empty key）。
+            // 但 membership key 可能为空（如未配置 / 未传 X-Eval-Token，或 deriveCaseKeyV1 收到空 token），
+            // 此处用单个 0x00 字节兜底，使空 key 退化为确定性哈希，而不是让探针请求 500。
+            byte[] k = (key == null || key.length == 0) ? new byte[]{0} : key;
+            mac.init(new SecretKeySpec(k, "HmacSHA256"));
             return mac.doFinal(msg == null ? new byte[0] : msg);
         } catch (Exception e) {
             throw new IllegalStateException("HmacSHA256 not available", e);

@@ -69,4 +69,20 @@ class EvalProbeChatIntegrationTest {
                 .andExpect(jsonPath("$.retrieval_hits[0].id").value("only_hit"))
                 .andExpect(jsonPath("$.sources[0].id").value("forged_chunk"));
     }
+
+    /**
+     * 回归：X-Eval-Token 为可选头，缺失时不应让探针 500。
+     * 历史 bug：空 token 派生空 HMAC key，Mac.init 抛 "Empty key" → 500。
+     * 现 CitationMembership.hmacSha256 对空 key 兜底，应返回 200 且仍带 hashes。
+     */
+    @Test
+    void probeCitationsOkWithoutEvalTokenStillReturns200() throws Exception {
+        mockMvc.perform(post("/api/v1/eval/chat")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .header(TargetClient.HDR_MEMBERSHIP_TOP_N, "8")
+                        .content("{\"query\":\"CITATIONS_OK\",\"mode\":\"EVAL\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sources[0].id").value("KB_CHUNK_1"))
+                .andExpect(jsonPath("$.meta.retrieval_hit_id_hashes[0]").exists());
+    }
 }
