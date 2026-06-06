@@ -152,4 +152,4 @@ management:
 # 阶段二：业务执行日志（RunRunner）—— key=value 便于 grep；默认 INFO 即可看到 run 起止与逐题摘要
 logging:
   level:
-    com.vagent.eval.run.RunRunner: INFO
+    com.eval.run.RunRunner: INFO
