@@ -11,7 +11,7 @@
         <relativePath/>
     </parent>
 
-    <groupId>com.vagent.eval</groupId>
+    <groupId>com.eval</groupId>
     <artifactId>vagent-eval</artifactId>
     <version>0.1.0-SNAPSHOT</version>
     <name>vagent-eval</name>

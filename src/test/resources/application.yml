@@ -3,10 +3,25 @@
 #
 # 阶段一+：主代码使用 JDBC + Flyway；集成测试需可连 PostgreSQL（与 CI services 或本地 Docker 一致）。
 spring:
+  # 与 src/main/resources/application.yml 对齐：API 响应使用 snake_case 序列化。
+  # 缺这行会让 @SpringBootTest 下 Jackson 回退到 camelCase，断言 $.dataset_id 等失败。
+  jackson:
+    property-naming-strategy: SNAKE_CASE
   datasource:
     url: jdbc:postgresql://localhost:5432/eval
     username: postgres
     password: postgres
+
+# 集成测试不连真实 Redis：关掉 Redis 健康探针，否则 /actuator/health 因连不上 Redis 报 503（DOWN）。
+management:
+  health:
+    redis:
+      enabled: false
+
+# Day6/Day10 用 DEFINED_PORT 起真实 Tomcat，并由 RunRunner 通过 TargetClient 回调本机 probe target，
+# 因此测试端口需与 probe target base-url 对齐（与 main application.yml 一致：8099）。
+server:
+  port: 8099
 
 eval:
   api:
@@ -14,6 +29,30 @@ eval:
     token-hash: ""
     allow-cidrs: []
     require-https: false
+  # 本地探针 citations 路径用此 token 派生 HMAC membership key；为空会触发 "Empty key" 500。
+  default-eval-token: "test-token"
+  # Day6 membership 哈希所用 salt（与 main 默认对齐）。
+  membership:
+    salt: "p0-local-dev"
+    top-n: 8
+  # 注册 /api/v1/eval/chat 本地探针端点。
+  probe:
+    enabled: true
+  # targets[0] 供 internalStatusExposesTargets 断言（vagent 必须在首位）；probe 供 Day6/Day10 自回调。
+  targets:
+    - target-id: vagent
+      base-url: http://localhost:8080
+      enabled: true
+    - target-id: probe
+      base-url: http://localhost:8099
+      enabled: true
+      # Day6 断言 results[].meta 含这些键；探针仅回填配置中列出的 trace key（见 ProbeMetaAugmentor）。
+      meta-trace-keys:
+        - hybrid_lexical_mode
+        - hybrid_lexical_outcome
+        - retrieve_hit_count
+        - retrieve_top1_distance
+        - retrieve_top1_distance_bucket
   # 集成测试不依赖 Redis；阶段五 5.1 连通性默认关闭
   scheduler:
     redis:
