@@ -72,6 +72,11 @@ public final class DebugSanitizer {
             "retrieval_supported",
             "tools_supported",
             "sources_count",
+            // expected_error_code 比对（A）：这三键解释「为何判 ERROR_CODE_MISMATCH/或为何 deny 算过」。
+            // 值是被测系统的业务错误码（如 PROMPT_INJECTION_BLOCKED），属契约枚举非业务明文 → 可落库。
+            "expected_error_code",
+            "actual_error_code",
+            "error_code_match",
             "http_status",
             "parse_error",
             "contract_reason",
@@ -102,6 +107,10 @@ public final class DebugSanitizer {
             "retrieval_supported",
             "tools_supported",
             "sources_count",
+            // expected_error_code 比对（A）：契约枚举值，给外部调用方解释 deny 用例的错误码判定。
+            "expected_error_code",
+            "actual_error_code",
+            "error_code_match",
             "contract_reason",
             "contract_violations",
             "membership_ok",

@@ -538,4 +538,72 @@ class RunEvaluatorTest {
         assertThat(o.errorCode()).isEqualTo(ErrorCode.CONTRACT_VIOLATION);
         assertThat(o.debug()).containsEntry("verdict_reason", "meta_low_confidence_must_be_boolean");
     }
+
+    // ---- A（Phase 3）：expected_error_code 比对（被测系统业务码，区别于本判定器 ErrorCode 枚举）----
+
+    /** deny 用例的契约合法响应（behavior=deny，requires_citations=false），带顶层业务 error_code。 */
+    private static String denyJsonWithErrorCode(String errorCode) {
+        return """
+                {
+                  "answer": "blocked",
+                  "behavior": "deny",
+                  "latency_ms": 1,
+                  "capabilities": {
+                    "retrieval": {"supported": true, "score": false},
+                    "tools": {"supported": false, "outcome": false}
+                  },
+                  "meta": {"mode": "EVAL"},
+                  "error_code": "%s",
+                  "sources": []
+                }
+                """.formatted(errorCode);
+    }
+
+    @Test
+    void expectedErrorCode_matchesActual_passes() throws Exception {
+        RunEvaluator evaluator = new RunEvaluator(new EvalChatContractValidator(), props("s", 8));
+        EvalCase c = new EvalCase(
+                "ec_match", "ds", "Q",
+                EvalExpectedBehavior.DENY, false, List.of(),
+                "PROMPT_INJECTION_BLOCKED",
+                Instant.parse("2026-04-10T00:00:00Z")
+        );
+        EvalOutcome o = evaluator.evaluate(c, om.readTree(denyJsonWithErrorCode("PROMPT_INJECTION_BLOCKED")), "vagent");
+        assertThat(o.verdict()).isEqualTo(Verdict.PASS);
+        assertThat(o.errorCode()).isNull();
+        assertThat(o.debug()).containsEntry("error_code_match", true);
+    }
+
+    @Test
+    void expectedErrorCode_mismatch_failsWithErrorCodeMismatch() throws Exception {
+        RunEvaluator evaluator = new RunEvaluator(new EvalChatContractValidator(), props("s", 8));
+        EvalCase c = new EvalCase(
+                "ec_miss", "ds", "Q",
+                EvalExpectedBehavior.DENY, false, List.of(),
+                "TOOL_OUTPUT_INJECTION_QUERY_BLOCKED",
+                Instant.parse("2026-04-10T00:00:00Z")
+        );
+        // behavior 仍是 deny（拦住了），但拦的错误码不是期望的那个 —— 此前会「亮绿说谎」，现在被这层抓住。
+        EvalOutcome o = evaluator.evaluate(c, om.readTree(denyJsonWithErrorCode("PROMPT_INJECTION_BLOCKED")), "vagent");
+        assertThat(o.verdict()).isEqualTo(Verdict.FAIL);
+        assertThat(o.errorCode()).isEqualTo(ErrorCode.ERROR_CODE_MISMATCH);
+        assertThat(o.debug()).containsEntry("verdict_reason", "error_code_mismatch");
+        assertThat(o.debug()).containsEntry("expected_error_code", "TOOL_OUTPUT_INJECTION_QUERY_BLOCKED");
+        assertThat(o.debug()).containsEntry("actual_error_code", "PROMPT_INJECTION_BLOCKED");
+    }
+
+    @Test
+    void expectedErrorCode_null_skipsComparison_backwardCompatible() throws Exception {
+        RunEvaluator evaluator = new RunEvaluator(new EvalChatContractValidator(), props("s", 8));
+        // 不声明 expected_error_code（旧 7 参构造器 → null）：即使响应带了某个 error_code 也不比对。
+        EvalCase c = new EvalCase(
+                "ec_null", "ds", "Q",
+                EvalExpectedBehavior.DENY, false, List.of(),
+                Instant.parse("2026-04-10T00:00:00Z")
+        );
+        EvalOutcome o = evaluator.evaluate(c, om.readTree(denyJsonWithErrorCode("ANYTHING_GOES")), "vagent");
+        assertThat(o.verdict()).isEqualTo(Verdict.PASS);
+        assertThat(o.errorCode()).isNull();
+        assertThat(o.debug()).doesNotContainKey("error_code_match");
+    }
 }
