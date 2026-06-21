@@ -135,6 +135,21 @@ public class RunEvaluator {
             return new EvalOutcome(Verdict.FAIL, ErrorCode.BEHAVIOR_MISMATCH, debug);
         }
 
+        // 可选：数据集声明了 expected_error_code 时，断言被测响应顶层业务 error_code 一致。
+        // 这是被测系统的业务码（如 PROMPT_INJECTION_BLOCKED），与本判定器的 ErrorCode 枚举语义不同。
+        // 价值：安全 deny 用例此前只能验证「拦没拦」(behavior=deny)，加这层后能验证「拦对没拦对」(错误码正确)。
+        String expectedErrorCode = c.expectedErrorCode();
+        if (expectedErrorCode != null && !expectedErrorCode.isBlank()) {
+            String actualErrorCode = asText(respJson.get("error_code"));
+            debug.put("expected_error_code", expectedErrorCode);
+            debug.put("actual_error_code", actualErrorCode);
+            if (!expectedErrorCode.trim().equalsIgnoreCase(actualErrorCode.trim())) {
+                debug.put("verdict_reason", "error_code_mismatch");
+                return new EvalOutcome(Verdict.FAIL, ErrorCode.ERROR_CODE_MISMATCH, debug);
+            }
+            debug.put("error_code_match", true);
+        }
+
         if (c.requiresCitations()) {
             if (!retrievalSupported) {
                 debug.put("verdict_reason", "retrieval_unsupported");

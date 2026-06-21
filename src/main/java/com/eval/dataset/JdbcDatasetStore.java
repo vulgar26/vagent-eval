@@ -107,8 +107,8 @@ public class JdbcDatasetStore implements DatasetStore {
             // 与 RunStore 写入 JSONB 一致：须 CAST，否则驱动按 varchar 绑定会触发「jsonb vs character varying」SQL 错误 → import 500。
             jdbc.update(
                     """
-                            INSERT INTO eval_case (dataset_id, case_id, question, expected_behavior, requires_citations, tags_json, created_at)
-                            VALUES (?,?,?,?,?,CAST(? AS jsonb),?)
+                            INSERT INTO eval_case (dataset_id, case_id, question, expected_behavior, requires_citations, tags_json, expected_error_code, created_at)
+                            VALUES (?,?,?,?,?,CAST(? AS jsonb),?,?)
                             """,
                     datasetId,
                     c.caseId(),
@@ -116,6 +116,7 @@ public class JdbcDatasetStore implements DatasetStore {
                     c.expectedBehavior().toJson(),
                     c.requiresCitations(),
                     tagsJson,
+                    c.expectedErrorCode(),
                     Timestamp.from(c.createdAt())
             );
         }
@@ -131,7 +132,7 @@ public class JdbcDatasetStore implements DatasetStore {
         int off = Math.max(0, offset);
         return jdbc.query(
                 """
-                        SELECT case_id, dataset_id, question, expected_behavior, requires_citations, tags_json, created_at
+                        SELECT case_id, dataset_id, question, expected_behavior, requires_citations, tags_json, expected_error_code, created_at
                         FROM eval_case
                         WHERE dataset_id = ?
                         ORDER BY id ASC
@@ -151,7 +152,7 @@ public class JdbcDatasetStore implements DatasetStore {
         }
         return jdbc.query(
                 """
-                        SELECT case_id, dataset_id, question, expected_behavior, requires_citations, tags_json, created_at
+                        SELECT case_id, dataset_id, question, expected_behavior, requires_citations, tags_json, expected_error_code, created_at
                         FROM eval_case
                         WHERE dataset_id = ?
                         ORDER BY id ASC
@@ -200,6 +201,7 @@ public class JdbcDatasetStore implements DatasetStore {
                 EvalExpectedBehavior.parse(rs.getString("expected_behavior")),
                 rs.getBoolean("requires_citations"),
                 tags,
+                rs.getString("expected_error_code"),
                 readInstant(rs, "created_at")
         );
     }

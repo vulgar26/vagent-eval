@@ -44,6 +44,12 @@ public final class RunModel {
         BEHAVIOR_MISMATCH,
         /** P0+ S1：期望 {@code tool} 路径但 {@code required&&used&&succeeded} 未满足（原误报为 {@link #UNKNOWN}）。 */
         TOOL_EXPECTATION_NOT_MET,
+        /**
+         * 期望的业务错误码（数据集 {@code expected_error_code}）与响应顶层 {@code error_code} 不一致。
+         * <p>注意区分：本枚举其它值是<em>判定器自身</em>的失败归因；而被比对的响应 {@code error_code} 是
+         * <em>被测系统</em>的业务码（如 {@code PROMPT_INJECTION_BLOCKED}）。两者语义不同，勿混。</p>
+         */
+        ERROR_CODE_MISMATCH,
         SECURITY_BOUNDARY_VIOLATION,
         POLICY_DISABLED,
         UNKNOWN,

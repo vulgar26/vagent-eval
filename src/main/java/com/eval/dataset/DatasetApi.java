@@ -237,6 +237,7 @@ public class DatasetApi {
                 node.put("expected_behavior", r.get("expected_behavior"));
                 node.put("requires_citations", r.get("requires_citations"));
                 node.put("tags", r.isMapped("tags") ? r.get("tags") : "");
+                node.put("expected_error_code", r.isMapped("expected_error_code") ? r.get("expected_error_code") : "");
                 try {
                     out.add(normalizeCase(datasetId, node.toJsonNode(objectMapper), now, "row:" + rowNo));
                 } catch (IllegalArgumentException e) {
@@ -310,6 +311,14 @@ public class DatasetApi {
         }
 
         List<String> tags = tags(node.get("tags"));
+        // 可选字段：安全 deny 用例可声明期望的业务错误码（如 PROMPT_INJECTION_BLOCKED）；
+        // 缺省/空白 → null，判定器不做错误码比对（向后兼容）。
+        String expectedErrorCode = text(node, "expected_error_code");
+        if (!StringUtils.hasText(expectedErrorCode)) {
+            expectedErrorCode = null;
+        } else {
+            expectedErrorCode = expectedErrorCode.trim();
+        }
         return new EvalCase(
                 caseId.trim(),
                 datasetId,
@@ -317,6 +326,7 @@ public class DatasetApi {
                 expected,
                 requiresCitations,
                 tags,
+                expectedErrorCode,
                 now
         );
     }
